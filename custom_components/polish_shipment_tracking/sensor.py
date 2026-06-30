@@ -113,7 +113,7 @@ async def async_setup_entry(
             
             current_ids.add(pid)
             if pid not in coordinator.known_parcels:
-                unique_id = f"{coordinator.courier}_{pid}"
+                unique_id = f"{coordinator.courier}_{entry.entry_id}_{pid}"
                 existing_entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
                 if existing_entity_id is not None:
                     existing_entry = registry.async_get(existing_entity_id)
@@ -161,8 +161,8 @@ def _async_remove_old_entities(
 ) -> None:
     """Remove entities that are no longer in the active parcels list."""
     registry = async_get_entity_registry(hass)
-    current_unique_ids = {f"{coordinator.courier}_{pid}" for pid in current_ids}
-    
+    current_unique_ids = {f"{coordinator.courier}_{entry.entry_id}_{pid}" for pid in current_ids}
+
     entities_to_remove = []
     for entity_entry in registry.entities.values():
         if (
@@ -200,7 +200,7 @@ class ShipmentSensor(CoordinatorEntity[ShipmentCoordinator], SensorEntity):
         # We also add "Parcel" (Paczka) as in the example
         parcel_word = "Paczka" if coordinator.hass.config.language == "pl" else "Parcel"
         self._attr_name = f"{self._courier.title()} {parcel_word} {tracking_number}"
-        self._attr_unique_id = f"{self._courier}_{tracking_number}"
+        self._attr_unique_id = f"{self._courier}_{coordinator.entry.entry_id}_{tracking_number}"
         self._attr_translation_key = "shipment_status"
         self.parcel_data = parcel_data
 
@@ -350,6 +350,8 @@ class ShipmentSensor(CoordinatorEntity[ShipmentCoordinator], SensorEntity):
             attrs["timeline_step"] = data["timelineStep"]
         if data.get("step"):
             attrs["current_step"] = data["step"]
+        if data.get("description"):
+            attrs["current_step_description"] = data["description"]
 
         # PIN doubles as the code shown at lockers and DHL POP points, but it is
         # only worth showing once it is actually needed - DHL returns it from
