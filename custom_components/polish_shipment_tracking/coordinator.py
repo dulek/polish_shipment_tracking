@@ -40,7 +40,7 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         self.courier = entry.data[CONF_COURIER]
         self.known_parcels = set()
         self.add_entities_callback = None
-        # Per-account session owned by this coordinator (DHL only). DHL auth is
+        # Per-account session owned by this coordinator (DHL/GLS). Their auth is
         # cookie-based, so accounts must NOT share HA's global cookie jar or one
         # account's access-token cookie bleeds into the other's requests.
         self._owned_session: aiohttp.ClientSession | None = None
@@ -112,10 +112,10 @@ class ShipmentCoordinator(DataUpdateCoordinator):
             # GlsApi manages cookies manually; a shared session's cookie jar
             # accumulates Azure B2C cookies that eventually poison token
             # requests, so give it a cookieless session (same as config flow).
-            gls_session = async_create_clientsession(
+            self._owned_session = async_create_clientsession(
                 self.hass, cookie_jar=aiohttp.DummyCookieJar()
             )
-            api = GlsApi(gls_session, session_id=data.get(CONF_SESSION_ID))
+            api = GlsApi(self._owned_session, session_id=data.get(CONF_SESSION_ID))
             api._token = token
             api._refresh_token = refresh_token
             api._id_token = data.get(CONF_ID_TOKEN)
@@ -331,7 +331,7 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         return enriched
 
     async def async_close(self) -> None:
-        """Close any session owned by this coordinator (DHL isolated session)."""
+        """Close any session owned by this coordinator (DHL/GLS isolated session)."""
         if self._owned_session is not None:
             await self._owned_session.close()
             self._owned_session = None
