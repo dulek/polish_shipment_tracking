@@ -168,6 +168,9 @@ def _async_remove_old_entities(
         if (
             entity_entry.platform == DOMAIN
             and entity_entry.config_entry_id == entry.entry_id
+            # Buttons have their own lifecycle in button.py; their unique_ids
+            # never match sensor ones, so they would be removed every cycle.
+            and entity_entry.domain == "sensor"
             and entity_entry.unique_id != ACTIVE_SHIPMENTS_UNIQUE_ID
             and entity_entry.unique_id not in current_unique_ids
         ):
@@ -241,6 +244,8 @@ class ShipmentSensor(CoordinatorEntity[ShipmentCoordinator], SensorEntity):
             self._add_inpost_attributes(attrs)
         elif self._courier == "dpd":
             self._add_dpd_attributes(attrs)
+        elif self._courier == "dhl":
+            self._add_dhl_attributes(attrs)
         elif self._courier == "pocztex":
             self._add_pocztex_attributes(attrs)
         elif self._courier == "gls":
@@ -283,6 +288,144 @@ class ShipmentSensor(CoordinatorEntity[ShipmentCoordinator], SensorEntity):
         sender = self.parcel_data.get("sender")
         if isinstance(sender, dict):
             attrs["sender"] = sender.get("name")
+
+        # When the parcel is delivered to a pickup point (PUDO), expose the
+        # point details so they show up in the list and dialog like InPost.
+        point = None
+        delivery = self.parcel_data.get("delivery")
+        if isinstance(delivery, dict) and isinstance(delivery.get("point"), dict):
+            point = delivery["point"]
+        elif isinstance(self.parcel_data.get("delivery_point"), dict):
+            point = self.parcel_data["delivery_point"]
+
+        if isinstance(point, dict):
+            address = point.get("address") or {}
+            parts = [
+                point.get("name"),
+                address.get("address"),
+                address.get("postal_code"),
+                address.get("city"),
+            ]
+            location = ", ".join(str(part) for part in parts if part)
+            if location:
+                attrs["location"] = location
+            if point.get("pudo_type_group"):
+                attrs["parcel_shop_type"] = point.get("pudo_type_group")
+
+        # Pickup PIN shown when the parcel is ready for collection at a PUDO.
+        pin = self.parcel_data.get("pick_up_pin")
+        if not pin and isinstance(delivery, dict):
+            pin = delivery.get("pick_up_pin")
+        if pin:
+            attrs["pickup_code"] = pin
+
+    def _add_dhl_attributes(self, attrs: dict) -> None:
+        """Add DHL specific attributes."""
+        data = self.parcel_data
+
+        # sender/receiver are plain strings on both the list and details payload.
+        sender = data.get("sender")
+        if isinstance(sender, dict):
+            sender = sender.get("name")
+        if sender:
+            attrs["sender"] = sender
+
+        courier_info = data.get("courierDeliveryShipmentInfo")
+        if not isinstance(courier_info, dict):
+            courier_info = {}
+
+        # "receiver" stays null for incoming parcels; the real name sits in the
+        # courier delivery block.
+        receiver = data.get("receiver") or courier_info.get("name")
+        if receiver:
+            attrs["recipient_name"] = receiver
+
+        if data.get("customTitle"):
+            attrs["custom_title"] = data["customTitle"]
+        if data.get("packageType"):
+            attrs["package_type"] = data["packageType"]
+        if data.get("parcelExpirationDate"):
+            attrs["expiration_date"] = data["parcelExpirationDate"]
+        if data.get("timelineStep"):
+            attrs["timeline_step"] = data["timelineStep"]
+        if data.get("step"):
+            attrs["current_step"] = data["step"]
+
+        # PIN doubles as the code shown at lockers and DHL POP points, but it is
+        # only worth showing once it is actually needed - DHL returns it from
+        # the moment the shipment is registered.
+        pin = data.get("pin") or data.get("qrCode")
+        if pin and attrs.get("status_key") in {"handed_out_for_delivery", "waiting_for_pickup"}:
+            attrs["pickup_code"] = str(pin)
+
+        for attr_name, key in (
+            ("posting_date", "dateOfPostingUtc"),
+            ("delivery_date", "deliveryDateUtc"),
+            ("receipt_date", "receiptDateUtc"),
+            ("planned_delivery_date", "planOfDeliveryFromUtc"),
+            ("planned_delivery_date_to", "planOfDeliveryToUtc"),
+            ("delivery_up_to", "deliveryUpToUtc"),
+        ):
+            if data.get(key):
+                attrs[attr_name] = data[key]
+
+        # Before the parcel ships the only date hint is menuTimelineLabel, and
+        # even that stays null until the sender hands the parcel over.
+        timeline = data.get("menuTimelineLabel")
+        if isinstance(timeline, dict):
+            if not attrs.get("planned_delivery_date") and timeline.get("dateUtc"):
+                attrs["planned_delivery_date"] = timeline["dateUtc"]
+            if not attrs.get("planned_delivery_date_to") and timeline.get("dateToUtc"):
+                attrs["planned_delivery_date_to"] = timeline["dateToUtc"]
+            if timeline.get("status"):
+                attrs["timeline_status"] = timeline["status"]
+
+        # Only a real collection point belongs under "location"; a courier
+        # delivery address is the home address and gets its own attribute so it
+        # never shows up as a pickup point (or in the list view).
+        point = self._pick_dhl_point(data)
+        if point:
+            attrs["location"] = point
+        else:
+            delivery_address = self._pick_dhl_delivery_address(courier_info)
+            if delivery_address:
+                attrs["delivery_address"] = delivery_address
+
+        cod = data.get("cod")
+        if isinstance(cod, dict):
+            if cod.get("packagePaymentStatus"):
+                attrs["cod_payment_status"] = cod["packagePaymentStatus"]
+            if cod.get("paymentValue"):
+                attrs["cod_amount"] = cod["paymentValue"]
+            if cod.get("currency"):
+                attrs["cod_currency"] = cod["currency"]
+
+    @staticmethod
+    def _pick_dhl_point(data: dict) -> str | None:
+        """Return the locker or DHL POP point address, when the parcel goes there."""
+        for key in ("lockerInfo", "dhlPointInfo"):
+            info = data.get(key)
+            if not isinstance(info, dict):
+                continue
+            street = " ".join(
+                str(part)
+                for part in (info.get("street"), info.get("houseNumber") or info.get("streetNumber"))
+                if part
+            ).strip()
+            parts = [info.get("name"), street or None, info.get("zipCode"), info.get("city")]
+            address = ", ".join(str(part) for part in parts if part)
+            if address:
+                return address
+        return None
+
+    @staticmethod
+    def _pick_dhl_delivery_address(courier_info: dict) -> str | None:
+        """Return the courier delivery address."""
+        street = " ".join(
+            str(part) for part in (courier_info.get("street"), courier_info.get("streetNumber")) if part
+        ).strip()
+        parts = [street or None, courier_info.get("city")]
+        return ", ".join(str(part) for part in parts if part) or None
 
     def _add_pocztex_attributes(self, attrs: dict) -> None:
         """Add Pocztex specific attributes."""

@@ -217,7 +217,9 @@ _STATUS_MAP = {
         "REDIRECTED": "in_transport",
         "RESCHEDULED": "in_transport",
         "HANDED_OVER_FOR_DELIVERY": "handed_out_for_delivery",
+        "HANDED_OVER_FOR_DELIVERY_PUDO": "handed_out_for_delivery",
         "READY_TO_PICK_UP": "waiting_for_pickup",
+        "READY_TO_PICK_UP_PUDO": "waiting_for_pickup",
         "SELF_PICKUP": "waiting_for_pickup",
         "HARD_RESERVED": "waiting_for_pickup",
         "DELIVERED": "delivered",
@@ -228,12 +230,16 @@ _STATUS_MAP = {
     },
     "dhl": {
         "TT_MAG": "in_transport",
-        "TT_EDWP": "in_transport",
+        # EDWP = the sender still has the parcel; DHL shows "Nadawca
+        # przygotowuje przesyłkę do wysyłki" and leaves the timeline at step 0.
+        "TT_EDWP": "created",
         "TT_DWP_PUNKT": "handed_out_for_delivery",
         "TT_DWP_INT": "handed_out_for_delivery",
         "TT_DWP": "handed_out_for_delivery",
         "TT_MAG_INT": "in_transport",
-        "TT_LK": "waiting_for_pickup",
+        # LK = handed to the courier for delivery (internalStatus MAGLK, timeline
+        # "Delivery", "Kurier już jedzie z przesyłką") - not yet collectable.
+        "TT_LK": "handed_out_for_delivery",
         "TT_AWI": "waiting_for_pickup",
         "TT_OP": "delivered",
         "TT_DELAY_KUR": "exception",
@@ -379,5 +385,11 @@ def normalize_status(raw_status, courier):
 
 def is_delivered(data: dict, courier: str) -> bool:
     """Check if parcel is delivered."""
+    # Pocztex archives parcels with state/stateCode nulled out, which would
+    # otherwise normalize to "unknown" and resurface the parcel as active.
+    # Parcels that merely lack a state (e.g. still awaiting the first scan)
+    # keep archived=false and must stay active.
+    if courier == "pocztex" and data.get("archived") is True:
+        return True
     status_key = normalize_status(get_raw_status(data, courier), courier)
     return status_key in {"delivered", "returned", "cancelled"}

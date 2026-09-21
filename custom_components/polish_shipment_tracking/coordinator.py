@@ -6,8 +6,13 @@ import time
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+import aiohttp
+
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.aiohttp_client import (
+    async_create_clientsession,
+    async_get_clientsession,
+)
 
 from .const import (
     DOMAIN,
@@ -93,7 +98,13 @@ class ShipmentCoordinator(DataUpdateCoordinator):
 
         elif self.courier == "gls":
             from .api_gls import GlsApi
-            api = GlsApi(self.session, session_id=data.get(CONF_SESSION_ID))
+            # GlsApi manages cookies manually; a shared session's cookie jar
+            # accumulates Azure B2C cookies that eventually poison token
+            # requests, so give it a cookieless session (same as config flow).
+            gls_session = async_create_clientsession(
+                self.hass, cookie_jar=aiohttp.DummyCookieJar()
+            )
+            api = GlsApi(gls_session, session_id=data.get(CONF_SESSION_ID))
             api._token = token
             api._refresh_token = refresh_token
             api._id_token = data.get(CONF_ID_TOKEN)
@@ -106,6 +117,7 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         """Fetch data from API."""
         try:
             parcels = await self._fetch_parcels_with_retry()
+            self._persist_auth_if_changed()
             filtered = self._filter_active_parcels(parcels)
             return filtered
         except Exception as err:
@@ -154,11 +166,16 @@ class ShipmentCoordinator(DataUpdateCoordinator):
                     parcels = data["shipments"]
             if not parcels:
                 return []
-            return await self._enrich_dpd_parcels(parcels)
+            return await self._enrich_parcels_with_details(parcels)
             
         elif self.courier == "dhl":
             data = await self.api.get_parcels()
-            return data.get("shipments", [])
+            parcels = data.get("shipments", []) if isinstance(data, dict) else []
+            if not parcels:
+                return []
+            # The list payload has no events and no pickup point, so the card
+            # would show an almost empty dialog without the details call.
+            return await self._enrich_parcels_with_details(parcels)
 
         elif self.courier == "pocztex":
             data = await self.api.get_parcels()
@@ -170,6 +187,13 @@ class ShipmentCoordinator(DataUpdateCoordinator):
                     if key in data and isinstance(data[key], list):
                         parcels = data[key]
                         break
+            # Archived parcels come back with state nulled out; drop them
+            # before spending detail requests on them.
+            parcels = [
+                p
+                for p in parcels
+                if not (isinstance(p, dict) and p.get("archived") is True)
+            ]
             if not parcels:
                 return []
 
@@ -203,7 +227,7 @@ class ShipmentCoordinator(DataUpdateCoordinator):
 
         elif self.courier == "gls":
             data = await self.api.get_parcels()
-            self._persist_gls_auth_if_changed()
+            self._persist_auth_if_changed()
             parcels = []
             if isinstance(data, list):
                 parcels = data
@@ -224,7 +248,7 @@ class ShipmentCoordinator(DataUpdateCoordinator):
                     detail_tasks.append(self.api.get_parcel(tracking_uid))
 
             details_results = await asyncio.gather(*detail_tasks, return_exceptions=True)
-            self._persist_gls_auth_if_changed()
+            self._persist_auth_if_changed()
             enriched = []
             for parcel, details in zip(parcels, details_results):
                 if isinstance(details, Exception):
@@ -249,8 +273,8 @@ class ShipmentCoordinator(DataUpdateCoordinator):
 
         return []
 
-    async def _enrich_dpd_parcels(self, parcels):
-        """Fetch DPD parcel details to expose fields missing from the list endpoint."""
+    async def _enrich_parcels_with_details(self, parcels):
+        """Fetch per-parcel details to expose fields missing from the list endpoint."""
         semaphore = asyncio.Semaphore(5)
 
         async def _fetch_details(parcel):
@@ -266,7 +290,8 @@ class ShipmentCoordinator(DataUpdateCoordinator):
                     details = await self.api.get_parcel(tracking_number)
             except Exception as err:
                 _LOGGER.debug(
-                    "Failed to fetch DPD parcel details for %s, keeping list payload: %s",
+                    "Failed to fetch %s parcel details for %s, keeping list payload: %s",
+                    self.courier,
                     tracking_number,
                     err,
                 )
@@ -319,7 +344,7 @@ class ShipmentCoordinator(DataUpdateCoordinator):
                     _LOGGER.debug("GLS: cannot find trackingUid for shipmentNo=%s", tracking_number)
                     return None
                 data = await self.api.get_parcel(uid)
-                self._persist_gls_auth_if_changed()
+                self._persist_auth_if_changed()
             else:
                 data = await self.api.get_parcel(tracking_number)
             return self._extract_single_parcel(data, tracking_number)
@@ -390,6 +415,7 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         """
         try:
             parcel = await self._fetch_single_parcel_with_retry(tracking_number)
+            self._persist_auth_if_changed()
         except Exception as err:
             _LOGGER.debug(
                 "Single parcel refresh failed for %s %s, falling back to full refresh: %s",
@@ -467,19 +493,40 @@ class ShipmentCoordinator(DataUpdateCoordinator):
 
         self.hass.config_entries.async_update_entry(self.entry, data=new_data)
 
-    def _persist_gls_auth_if_changed(self):
-        """Persist GLS auth/session changes made during automatic refresh."""
-        if self.courier != "gls":
+    def _persist_auth_if_changed(self):
+        """Persist token changes made by proactive in-request refreshes.
+
+        The APIs refresh tokens on their own inside request(); without this the
+        config entry keeps the tokens from setup time and a restart would come
+        up with long-stale credentials.
+        """
+        if self.courier == "pocztex":
+            new_data = {
+                **self.entry.data,
+                CONF_TOKEN: self.api._token,
+                CONF_REFRESH_TOKEN: self.api._refresh_token,
+                CONF_TOKEN_EXPIRES_AT: self.api._expires_at,
+                CONF_REFRESH_EXPIRES_AT: self.api._refresh_expires_at,
+            }
+        elif self.courier == "dpd":
+            new_data = {
+                **self.entry.data,
+                CONF_TOKEN: self.api._token,
+                CONF_REFRESH_TOKEN: self.api._refresh_token,
+                CONF_TOKEN_EXPIRES_AT: self.api._expires_at,
+            }
+        elif self.courier == "gls":
+            new_data = {
+                **self.entry.data,
+                CONF_TOKEN: self.api._token,
+                CONF_REFRESH_TOKEN: self.api._refresh_token,
+                CONF_ID_TOKEN: self.api._id_token,
+                CONF_TOKEN_EXPIRES_AT: self.api._expires_at,
+                CONF_SESSION_ID: self.api._session_id,
+                CONF_SESSION_REGISTERED: self.api._session_registered,
+            }
+        else:
             return
 
-        new_data = {
-            **self.entry.data,
-            CONF_TOKEN: self.api._token,
-            CONF_REFRESH_TOKEN: self.api._refresh_token,
-            CONF_ID_TOKEN: self.api._id_token,
-            CONF_TOKEN_EXPIRES_AT: self.api._expires_at,
-            CONF_SESSION_ID: self.api._session_id,
-            CONF_SESSION_REGISTERED: self.api._session_registered,
-        }
         if new_data != self.entry.data:
             self.hass.config_entries.async_update_entry(self.entry, data=new_data)
