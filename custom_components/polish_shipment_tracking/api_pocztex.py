@@ -242,6 +242,9 @@ class PocztexApi:
             url,
             headers=headers,
             params=params,
+            # The tracking backend regularly needs 30s+ to answer authorized
+            # queries, so give it more headroom than the default.
+            timeout=60,
             label="Pocztex",
             log_401_as_info=False,
             error_with_text=True,
