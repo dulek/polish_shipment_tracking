@@ -220,19 +220,32 @@ class GlsApi:
             f"{self.AZURE_BASE_URL}/{self.TENANT}.onmicrosoft.com/oauth2/v2.0/token"
             f"?p={quote(self.SIGN_IN_POLICY)}"
         )
-        async with asyncio.timeout(30):
-            async with self._session.post(
-                url,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                data=urlencode(data),
-            ) as resp:
-                text = await resp.text()
-                body = _try_json(text)
-                if resp.status >= 400:
-                    raise Exception(f"GLS token request failed: {resp.status} - {text}")
-                if not isinstance(body, dict):
-                    raise Exception("GLS token response was not JSON")
-                return body
+        last_error: Exception | None = None
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(2 * attempt)
+            try:
+                async with asyncio.timeout(30):
+                    async with self._session.post(
+                        url,
+                        headers={"Content-Type": "application/x-www-form-urlencoded"},
+                        data=urlencode(data),
+                    ) as resp:
+                        text = await resp.text()
+                        body = _try_json(text)
+                        if isinstance(body, dict) and resp.status < 400:
+                            return body
+                        # 5xx and non-JSON 2xx responses are usually transient
+                        # gateway/maintenance pages - retry those.
+                        error = Exception(
+                            f"GLS token request failed: {resp.status} - {text[:300]!r}"
+                        )
+                        if resp.status < 500 and isinstance(body, dict):
+                            raise error
+                        last_error = error
+            except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+                last_error = Exception(f"GLS token request failed: {err}")
+        raise last_error
 
     async def _follow_to_msauth(self, start_url: str, referer: str) -> str:
         url = start_url
