@@ -8,14 +8,23 @@ const CARD_TRANSLATIONS = {
     "meta.name": "Shipment Tracking Card",
     "meta.description": "Displays shipment tracking sensors with status badges.",
     "editor.title": "Title",
+    "editor.show_list_sender": "Show sender in list",
     "editor.show_list_pickup_code": "Show pickup code in list",
     "editor.show_list_location": "Show pickup point in list",
+    "editor.show_dialog_tracking_number": "Show tracking number in details",
+    "editor.show_dialog_courier": "Show courier in details",
     "editor.show_dialog_sender": "Show sender in details",
     "editor.show_dialog_account_contact": "Show shipment account in details",
     "editor.show_dialog_recipient": "Show recipient in details",
     "editor.show_dialog_pickup_code": "Show pickup code in details",
     "editor.show_dialog_pickup_point": "Show pickup point in details",
     "editor.show_dialog_navigation": "Show navigation link in details",
+    "editor.show_dialog_delivery_address": "Show delivery address in details",
+    "editor.show_dialog_package_type": "Show shipment type in details",
+    "editor.show_dialog_courier_contact": "Show courier name and phone in details",
+    "editor.show_dialog_delivery_method": "Show delivery method in details",
+    "editor.show_dialog_parcel_shop_type": "Show point type in details",
+    "editor.show_dialog_live_tracking": "Show live courier tracking in details",
     "editor.show_dialog_cod": "Show COD amount in details",
     "editor.show_dialog_delivery_date": "Show planned delivery date in details",
     "editor.show_dialog_parcel_size": "Show parcel size in details",
@@ -48,8 +57,20 @@ const CARD_TRANSLATIONS = {
     "dialog.parcel_shop_type": "Point type",
     "dialog.close": "Close",
     "card.refresh_all": "Refresh all shipments",
+    "dialog.package_type": "Shipment type",
+    "dialog.delivery_address": "Delivery address",
+    "dhl.COURIER": "Courier delivery",
+    "dhl.LOCKER": "DHL BOX parcel locker",
+    "dhl.POP": "DHL POP point",
+    "dhl.OBSERVED": "Observed shipment",
+    "dhl.step.SENT": "Posted",
+    "dhl.step.ROUTE": "In transit",
+    "dhl.step.DELIVERY": "Out for delivery",
+    "dhl.step.DELIVERED": "Collected",
     "dpd.DELIVERED": "Delivered",
     "dpd.HANDED_OVER_FOR_DELIVERY": "Out for delivery",
+    "dpd.HANDED_OVER_FOR_DELIVERY_PUDO": "Out for delivery to pickup point",
+    "dpd.READY_TO_PICK_UP_PUDO": "Ready for pickup",
     "dpd.RECEIVED_IN_DEPOT": "Received in depot",
     "dpd.IN_TRANSPORT": "In transit",
     "dpd.RECEIVED_FROM_SENDER": "Received from sender",
@@ -68,14 +89,23 @@ const CARD_TRANSLATIONS = {
     "meta.name": "Karta śledzenia przesyłek",
     "meta.description": "Wyświetla sensory śledzenia przesyłek z etykietami statusu.",
     "editor.title": "Tytuł",
+    "editor.show_list_sender": "Pokaż nadawcę na liście",
     "editor.show_list_pickup_code": "Pokaż kod odbioru na liście",
     "editor.show_list_location": "Pokaż lokalizację na liście",
+    "editor.show_dialog_tracking_number": "Pokaż numer przesyłki w szczegółach",
+    "editor.show_dialog_courier": "Pokaż kuriera w szczegółach",
     "editor.show_dialog_sender": "Pokaż nadawcę w szczegółach",
     "editor.show_dialog_account_contact": "Pokaż dane konta przesyłki w szczegółach",
     "editor.show_dialog_recipient": "Pokaż odbiorcę w szczegółach",
     "editor.show_dialog_pickup_code": "Pokaż kod odbioru w szczegółach",
     "editor.show_dialog_pickup_point": "Pokaż punkt odbioru w szczegółach",
     "editor.show_dialog_navigation": "Pokaż link nawigacji w szczegółach",
+    "editor.show_dialog_delivery_address": "Pokaż adres doręczenia w szczegółach",
+    "editor.show_dialog_package_type": "Pokaż typ przesyłki w szczegółach",
+    "editor.show_dialog_courier_contact": "Pokaż imię i telefon kuriera w szczegółach",
+    "editor.show_dialog_delivery_method": "Pokaż metodę doręczenia w szczegółach",
+    "editor.show_dialog_parcel_shop_type": "Pokaż typ punktu w szczegółach",
+    "editor.show_dialog_live_tracking": "Pokaż śledzenie kuriera na żywo w szczegółach",
     "editor.show_dialog_cod": "Pokaż kwotę pobrania w szczegółach",
     "editor.show_dialog_delivery_date": "Pokaż planowaną datę doręczenia w szczegółach",
     "editor.show_dialog_parcel_size": "Pokaż gabaryt paczki w szczegółach",
@@ -108,8 +138,20 @@ const CARD_TRANSLATIONS = {
     "dialog.parcel_shop_type": "Typ punktu",
     "dialog.close": "Zamknij",
     "card.refresh_all": "Odśwież wszystkie przesyłki",
+    "dialog.package_type": "Typ przesyłki",
+    "dialog.delivery_address": "Adres doręczenia",
+    "dhl.COURIER": "Doręczenie kurierem",
+    "dhl.LOCKER": "Automat DHL BOX",
+    "dhl.POP": "Punkt DHL POP",
+    "dhl.OBSERVED": "Przesyłka obserwowana",
+    "dhl.step.SENT": "Nadana",
+    "dhl.step.ROUTE": "W drodze",
+    "dhl.step.DELIVERY": "W doręczeniu",
+    "dhl.step.DELIVERED": "Odebrana",
     "dpd.DELIVERED": "Dostarczona",
     "dpd.HANDED_OVER_FOR_DELIVERY": "Wydana do doręczenia",
+    "dpd.HANDED_OVER_FOR_DELIVERY_PUDO": "Wydana do doręczenia do punktu odbioru",
+    "dpd.READY_TO_PICK_UP_PUDO": "Gotowa do odbioru",
     "dpd.RECEIVED_IN_DEPOT": "Przyjęta w oddziale",
     "dpd.IN_TRANSPORT": "W drodze",
     "dpd.RECEIVED_FROM_SENDER": "Odebrana od nadawcy",
@@ -442,6 +484,33 @@ class ShipmentTrackingCard extends HTMLElement {
             margin-bottom: 24px;
             width: 100%;
           }
+          .manage-accordion { width: 100%; }
+          .manage-accordion > summary {
+            list-style: none;
+            position: relative;
+          }
+          .manage-accordion > summary::-webkit-details-marker { display: none; }
+          .manage-accordion > summary .chevron {
+            position: absolute; right: 12px; --mdc-icon-size: 20px;
+            transition: transform 0.2s ease;
+          }
+          .manage-accordion[open] > summary .chevron { transform: rotate(180deg); }
+          .manage-accordion[open] > summary { border-radius: 8px 8px 0 0; }
+          .manage-options {
+            display: flex; flex-direction: column;
+            border: 1px solid var(--primary-color); border-top: none;
+            border-radius: 0 0 8px 8px; overflow: hidden;
+          }
+          .manage-options a {
+            display: flex; align-items: center; gap: 10px;
+            padding: 12px 16px; text-decoration: none;
+            color: var(--primary-text-color); font-size: 0.95rem;
+            border-top: 1px solid var(--divider-color, rgba(0,0,0,0.1));
+          }
+          .manage-options a:first-child { border-top: none; }
+          .manage-options a:hover { background: var(--secondary-background-color, rgba(0,0,0,0.05)); }
+          .manage-options a ha-icon { --mdc-icon-size: 20px; color: var(--primary-color); flex-shrink: 0; }
+          .manage-option-desc { display: block; font-size: 0.8rem; color: var(--secondary-text-color); }
           .manage-btn {
             display: flex; align-items: center; justify-content: center; width: 100%;
             box-sizing: border-box;
@@ -572,6 +641,9 @@ class ShipmentTrackingCard extends HTMLElement {
 
   _closeDialog() {
     this._openDialogEntityId = null;
+    this._manageAccordionOpen = false;
+    this._lastModalContentHtml = null;
+    this._lastModalHeaderHtml = null;
     this.querySelector('#modal-overlay')?.classList.remove('open');
   }
 
@@ -846,13 +918,19 @@ class ShipmentTrackingCard extends HTMLElement {
     const { reopen = true } = options;
     const stateObj = this._hass.states[entityId];
     if (!stateObj) return;
+    if (this._openDialogEntityId !== entityId) {
+      this._manageAccordionOpen = false;
+    }
     this._openDialogEntityId = entityId;
 
     const attrs = stateObj.attributes;
     const rawStr = attrs.raw_response;
-    const friendlyName = attrs.sender || attrs.sender_name || attrs.recipient_name || attrs.tracking_number;
+    const friendlyName = this._isEnabled("show_dialog_sender")
+      ? (attrs.sender || attrs.sender_name || attrs.recipient_name || attrs.tracking_number)
+      : attrs.tracking_number;
     
-    this.querySelector('#modal-title').innerText = friendlyName;
+    const titleEl = this.querySelector('#modal-title');
+    if (titleEl.innerText !== friendlyName) titleEl.innerText = friendlyName;
 
     // Header Actions Check
     const refreshShipmentButtonId = this._getRefreshShipmentButtonId(attrs);
@@ -864,13 +942,19 @@ class ShipmentTrackingCard extends HTMLElement {
     if (refreshShipmentButtonId) {
       headerActionsHtml += `<button class="header-icon-btn" data-refresh-button="${refreshShipmentButtonId}" title="${this._localize("dialog.refresh_shipment")}"><ha-icon icon="mdi:refresh"></ha-icon></button>`;
     }
+    // The dialog is re-run on every state update; rewriting identical markup
+    // would drop the user's text selection mid-copy, so only touch the DOM when
+    // the markup actually changed. Listeners are bound in the same branch,
+    // otherwise skipping the rewrite would stack duplicates on the old nodes.
     const headerDynamicContainer = this.querySelector('#header-dynamic-actions');
-    if (headerDynamicContainer) {
+    const headerChanged = this._lastModalHeaderHtml !== headerActionsHtml;
+    if (headerDynamicContainer && headerChanged) {
       headerDynamicContainer.innerHTML = headerActionsHtml;
     }
+    this._lastModalHeaderHtml = headerActionsHtml;
 
     // Bind Header Listeners
-    const entityBtn = this.querySelector('[data-entity-button]');
+    const entityBtn = headerChanged ? this.querySelector('[data-entity-button]') : null;
     if (entityBtn) {
       entityBtn.addEventListener('click', () => {
         this._closeDialog();
@@ -882,7 +966,7 @@ class ShipmentTrackingCard extends HTMLElement {
       });
     }
 
-    const refreshBtn = this.querySelector('[data-refresh-button]');
+    const refreshBtn = headerChanged ? this.querySelector('[data-refresh-button]') : null;
     if (refreshBtn) {
       refreshBtn.addEventListener('click', async () => {
         const refreshEntityId = refreshBtn.getAttribute('data-refresh-button');
@@ -903,10 +987,10 @@ class ShipmentTrackingCard extends HTMLElement {
     // Modal Content
     let infoHtml = `<div class="modal-info-block">`;
     
-    if (attrs.tracking_number) {
+    if (this._isEnabled("show_dialog_tracking_number") && attrs.tracking_number) {
         infoHtml += `<div class="modal-info-block-row"><strong>Numer:</strong> <span class="val" style="flex-grow: 1; user-select: all; -webkit-user-select: all;">${attrs.tracking_number}</span></div>`;
     }
-    if (attrs.courier) {
+    if (this._isEnabled("show_dialog_courier") && attrs.courier) {
       infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.courier_name")}:</strong> <span class="val">${attrs.courier}</span></div>`;
     }
     if (this._isEnabled("show_dialog_sender") && (attrs.sender || attrs.sender_name)) {
@@ -924,6 +1008,7 @@ class ShipmentTrackingCard extends HTMLElement {
     
     let timelineHtml = '';
     let manageShipmentAvailable = false;
+    let dhlOptions = [];
     
     if (rawStr) {
       try {
@@ -938,8 +1023,17 @@ class ShipmentTrackingCard extends HTMLElement {
           return date.toLocaleString(locale, { dateStyle: 'short', timeStyle: 'short' });
         };
 
-        if (!attrs.courier && courier === 'dpd' && raw.delivery && raw.delivery.courier_name) {
-          infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.courier_name")}:</strong> <span class="val">${raw.delivery.courier_name}</span></div>`;
+        if (courier === 'dpd') {
+          // Courier person details appear once the parcel is out for delivery.
+          const dpdDelivery = raw.delivery || {};
+          const dpdCourierName = dpdDelivery.courier_name;
+          const dpdCourierPhone = dpdDelivery.courier_phone || raw.courier_phone;
+          if (this._isEnabled("show_dialog_courier_contact") && dpdCourierName) {
+            infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("labels.courier_default")}:</strong> <span class="val">${dpdCourierName}</span></div>`;
+          }
+          if (this._isEnabled("show_dialog_courier_contact") && dpdCourierPhone) {
+            infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.courier_phone")}:</strong> <span class="val"><a href="tel:${dpdCourierPhone}" class="modal-nav-link">${dpdCourierPhone}</a></span></div>`;
+          }
         }
 
         if (this._isEnabled("show_dialog_cod") && courier === 'pocztex' && (raw.amount !== null || raw.paymentAmount !== null)) {
@@ -951,6 +1045,43 @@ class ShipmentTrackingCard extends HTMLElement {
           const plannedDeliveryDate = raw.delivery?.planned_delivery_date || raw.planned_delivery_date;
           if (plannedDeliveryDate) {
             infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.planned_delivery_date")}:</strong> <span class="val">${plannedDeliveryDate}</span></div>`;
+          }
+        }
+
+        if (courier === 'dhl') {
+          const packageType = attrs.package_type || raw.packageType;
+          if (this._isEnabled("show_dialog_package_type") && packageType) {
+            const typeKey = `dhl.${String(packageType).toUpperCase()}`;
+            const typeLabel = this._localize(typeKey) !== typeKey ? this._localize(typeKey) : packageType;
+            infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.package_type")}:</strong> <span class="val">${typeLabel}</span></div>`;
+          }
+
+          // Every option carries a ready-made https link, so there is no need
+          // for the button-entity round trip DPD needs.
+          dhlOptions = (Array.isArray(raw.options) ? raw.options : [])
+            .filter(option => option?.label && typeof option.link === 'string' && option.link.startsWith('https://'));
+
+          if (this._isEnabled("show_dialog_delivery_address") && attrs.delivery_address) {
+            infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.delivery_address")}:</strong> <span class="val">${attrs.delivery_address}</span></div>`;
+          }
+
+          if (this._isEnabled("show_dialog_cod") && raw.cod?.codService && raw.cod?.paymentValue) {
+            const codStr = `${raw.cod.paymentValue} ${raw.cod.currency || 'zł'}`;
+            infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.cod")}:</strong> <span class="val">${codStr}</span></div>`;
+          }
+
+          // DHL fills the delivery window only once the parcel is on its way;
+          // until then every date field stays null.
+          if (this._isEnabled("show_dialog_delivery_date")) {
+            const timeline = raw.menuTimelineLabel || {};
+            const plannedFrom = raw.planOfDeliveryFromUtc || raw.deliveryUpToUtc || timeline.dateUtc;
+            const plannedTo = raw.planOfDeliveryToUtc || timeline.dateToUtc;
+            if (plannedFrom) {
+              const plannedStr = plannedTo
+                ? `${formatDateTime(plannedFrom)} - ${formatDateTime(plannedTo)}`
+                : formatDateTime(plannedFrom);
+              infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.planned_delivery_date")}:</strong> <span class="val">${plannedStr}</span></div>`;
+            }
           }
         }
 
@@ -978,22 +1109,34 @@ class ShipmentTrackingCard extends HTMLElement {
           if (this._isEnabled("show_dialog_parcel_size") && glsWeight) {
             infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.weight")}:</strong> <span class="val">${glsWeight} kg</span></div>`;
           }
-          if (courierPersonName) {
+          if (this._isEnabled("show_dialog_courier_contact") && courierPersonName) {
             infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("labels.courier_default")}:</strong> <span class="val">${courierPersonName}</span></div>`;
           }
-          if (courierPhone) {
+          if (this._isEnabled("show_dialog_courier_contact") && courierPhone) {
             infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.courier_phone")}:</strong> <span class="val"><a href="tel:${courierPhone}" class="modal-nav-link">${courierPhone}</a></span></div>`;
           }
-          if (deliveryMethod) {
+          if (this._isEnabled("show_dialog_delivery_method") && deliveryMethod) {
             infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.delivery_method")}:</strong> <span class="val">${this._localize(`gls.${deliveryMethod}`)}</span></div>`;
           }
-          if (parcelShopType) {
+          if (this._isEnabled("show_dialog_parcel_shop_type") && parcelShopType) {
             infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.parcel_shop_type")}:</strong> <span class="val">${parcelShopType}</span></div>`;
           }
 
-          const postalCode = trackingShipment.receiver?.postalCode;
-          const trackingNo = trackingShipment.shipmentNo || trackingShipment.trackingId || attrs.tracking_number;
-          if (attrs.status_key === "handed_out_for_delivery" && deliveryMethod === "TO_DOOR" && postalCode && trackingNo) {
+          // The receiver object carries no address; the postcode lives either directly on
+          // trackingShipment or on the matching party in trackingParties.
+          const receiverParty = Array.isArray(raw.trackingParties)
+            ? raw.trackingParties.find((p) => p?.shipmentSenderUid === trackingShipment.receiver?.shipmentSenderUid)
+            : null;
+          const postalCode = trackingShipment.receiverPostalCode
+            || trackingShipment.receiver?.postalCode
+            || receiverParty?.postalCode;
+          // BetterMile keys parcels on the number WITHOUT its trailing check digit:
+          // 266107156012 -> 26610715601. The full number returns PARCEL-404.
+          const shipmentNo = trackingShipment.shipmentNo || attrs.tracking_number;
+          const trackingNo = shipmentNo && String(shipmentNo).length > 1
+            ? String(shipmentNo).slice(0, -1)
+            : shipmentNo;
+          if (this._isEnabled("show_dialog_live_tracking") && attrs.status_key === "handed_out_for_delivery" && deliveryMethod === "TO_DOOR" && postalCode && trackingNo) {
             const rttUrl = `https://gls-rtt.com/#/preview/gls-pl/pl/${encodeURIComponent(trackingNo)}/${encodeURIComponent(postalCode)}`;
             infoHtml += `
               <div class="manage-shipment-container">
@@ -1006,8 +1149,14 @@ class ShipmentTrackingCard extends HTMLElement {
         }
 
         let locationName = attrs.location || attrs.current_location;
+        const dpdPoint = courier === 'dpd' ? (raw.delivery?.point || raw.delivery_point) : null;
         if (locationName && courier === 'inpost' && raw.pickUpPoint?.locationDescription) {
           locationName += ' (' + raw.pickUpPoint.locationDescription + ')';
+        }
+        if (dpdPoint && typeof dpdPoint === 'object') {
+          const a = dpdPoint.address || {};
+          const addr = [a.address, a.postal_code, a.city].filter(Boolean).join(', ');
+          locationName = [dpdPoint.name, addr].filter(Boolean).join('<br>') || locationName;
         }
         if (!locationName && courier === 'pocztex') {
           const pickupLocation = raw.pickupLocation;
@@ -1033,14 +1182,32 @@ class ShipmentTrackingCard extends HTMLElement {
             const lon = raw.pickUpPoint.location.longitude;
             locationContent += `<br><a href="https://maps.google.com/?q=${lat},${lon}" target="_blank" class="modal-nav-link"><ha-icon icon="mdi:map-marker-path"></ha-icon> ${this._localize("dialog.navigate")}</a>`;
           }
-          
+
+          if (this._isEnabled("show_dialog_navigation") && dpdPoint && dpdPoint.latitude && dpdPoint.longitude) {
+            locationContent += `<br><a href="https://maps.google.com/?q=${dpdPoint.latitude},${dpdPoint.longitude}" target="_blank" class="modal-nav-link"><ha-icon icon="mdi:map-marker-path"></ha-icon> ${this._localize("dialog.navigate")}</a>`;
+          }
+
+          if (this._isEnabled("show_dialog_navigation") && courier === 'dhl' && raw.lockerInfo?.latitude && raw.lockerInfo?.longitude) {
+            locationContent += `<br><a href="https://maps.google.com/?q=${raw.lockerInfo.latitude},${raw.lockerInfo.longitude}" target="_blank" class="modal-nav-link"><ha-icon icon="mdi:map-marker-path"></ha-icon> ${this._localize("dialog.navigate")}</a>`;
+          }
+
+          if (courier === 'dhl') {
+            const hours = raw.dhlPointInfo?.openHoursMonFri || raw.lockerInfo?.lockerOpenHours;
+            if (hours) {
+              locationContent += `<br><span class="timeline-desc">${hours}</span>`;
+            }
+          }
+
           locationContent += `</span>`;
           infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.pickup_point")}:</strong> ${locationContent}</div>`;
         }
 
-        if (this._isEnabled("show_dialog_qr_code") && courier === 'inpost' && raw.qrCode && attrs.status_key === 'waiting_for_pickup') {
-           const qrUrlSmall = `https://quickchart.io/qr?text=${encodeURIComponent(raw.qrCode)}&size=150&margin=0&ecLevel=H`;
-           const qrUrlLarge = `https://quickchart.io/qr?text=${encodeURIComponent(raw.qrCode)}&size=500&margin=0&ecLevel=H`;
+        const qrPayload = courier === 'inpost'
+          ? raw.qrCode
+          : (courier === 'dhl' && ['LOCKER', 'POP'].includes(String(raw.packageType || '').toUpperCase()) ? raw.qrCode : null);
+        if (this._isEnabled("show_dialog_qr_code") && qrPayload && attrs.status_key === 'waiting_for_pickup') {
+           const qrUrlSmall = `https://quickchart.io/qr?text=${encodeURIComponent(qrPayload)}&size=150&margin=0&ecLevel=H`;
+           const qrUrlLarge = `https://quickchart.io/qr?text=${encodeURIComponent(qrPayload)}&size=500&margin=0&ecLevel=H`;
            infoHtml += `
              <div class="qr-code-container" data-large-qr="${qrUrlLarge}">
                <img src="${qrUrlSmall}" alt="QR Code" />
@@ -1119,6 +1286,66 @@ class ShipmentTrackingCard extends HTMLElement {
                 <div class="timeline-title">${title}</div>
               </div>`;
           });
+        } else if (courier === 'dhl') {
+          // DHL exposes no event log at all - only a fixed four-point timeline
+          // plus a headline describing where the parcel currently stands.
+          const STEP_ORDER = {
+            None: 0, Resigned: 0, Sent: 1, Route: 2, Delivery: 3,
+            ReturnToSender: 4, Delivered: 5, DeliveredToSender: 6, Error: 7,
+          };
+          const currentStep = raw.timelineStep || attrs.timeline_step || 'None';
+          // Lost / disposed parcels never light any step up in the DHL app.
+          const brokenStatus = raw.status === 'TT_ZGN' || raw.status === 'TT_LIK';
+          const isReached = (step) => !brokenStatus
+            && (currentStep === step || STEP_ORDER[step] < (STEP_ORDER[currentStep] ?? -1));
+
+          const plannedWindow = raw.planOfDeliveryFromUtc && raw.planOfDeliveryToUtc
+            ? `${formatDateTime(raw.planOfDeliveryFromUtc)} - ${formatDateTime(raw.planOfDeliveryToUtc)}`
+            : '';
+          const steps = [
+            {
+              key: 'Sent',
+              title: this._localize('dhl.step.SENT'),
+              date: formatDateTime(raw.dateOfPostingUtc || raw.shipmentDateUtc),
+              desc: '',
+            },
+            { key: 'Route', title: this._localize('dhl.step.ROUTE'), date: '', desc: '' },
+            {
+              key: 'Delivery',
+              title: raw.timelineStep3Label || this._localize('dhl.step.DELIVERY'),
+              date: formatDateTime(raw.deliveryDateUtc),
+              desc: plannedWindow,
+            },
+            {
+              key: 'Delivered',
+              title: raw.timelineStep4Label || this._localize('dhl.step.DELIVERED'),
+              date: formatDateTime(raw.receiptDateUtc),
+              desc: '',
+            },
+          ];
+
+          const renderStep = (step) => `
+              <div class="timeline-item">
+                ${step.date ? `<div class="timeline-date">${step.date}</div>` : ''}
+                <div class="timeline-title">${step.title}</div>
+                ${step.desc ? `<div class="timeline-desc">${step.desc}</div>` : ''}
+              </div>`;
+
+          // Only what already happened, newest first - same as every other
+          // courier. The headline describes the newest entry, so it rides along
+          // as its description.
+          const reachedSteps = steps.filter(step => isReached(step.key)).reverse();
+          if (reachedSteps.length === 0) {
+            if (raw.step || raw.description) {
+              timelineHtml += renderStep({ date: '', title: raw.step || '', desc: raw.description || '' });
+            }
+          } else {
+            reachedSteps.forEach((step, index) => {
+              timelineHtml += renderStep(index === 0
+                ? { ...step, desc: [raw.description, step.desc].filter(Boolean).join('<br>') }
+                : step);
+            });
+          }
         } else if (courier === 'gls' && Array.isArray(raw.trackingShipmentPackages)) {
           const glsEvents = [];
           raw.trackingShipmentPackages.forEach(pkg => {
@@ -1133,13 +1360,13 @@ class ShipmentTrackingCard extends HTMLElement {
               const dateStr = formatDateTime(event.packageStatusDate);
               const title = event.packageStatusName || event.packageStatusDescription || '';
               const place = event.packageStatusPlace ? `<div class="timeline-desc">${event.packageStatusPlace}</div>` : '';
-              const packageLine = event.packageNo ? `<div class="timeline-desc"><span dir="ltr">${event.packageNo}</span></div>` : '';
+              const description = event.packageStatusDescription ? `<div class="timeline-desc">${event.packageStatusDescription}</div>` : '';
               timelineHtml += `
                 <div class="timeline-item">
                   <div class="timeline-date">${dateStr}</div>
                   <div class="timeline-title">${title}</div>
+                  ${description}
                   ${place}
-                  ${packageLine}
                 </div>`;
             });
         }
@@ -1161,6 +1388,29 @@ class ShipmentTrackingCard extends HTMLElement {
     const manageShipmentPending = manageShipmentButtonId && !manageShipmentUrl && this._isManageUrlPending(attrs);
       
     let finalHtml = infoHtml;
+
+    // DHL hands out a ready-made https link per action - too many to stack as
+    // buttons, so they live behind the same "manage shipment" affordance DPD
+    // gets, collapsed until asked for.
+    if (this._isEnabled("show_dialog_manage_button") && dhlOptions.length > 0) {
+      finalHtml += `
+        <div class="manage-shipment-container">
+          <details class="manage-accordion">
+            <summary class="manage-btn">
+              <ha-icon icon="mdi:open-in-new"></ha-icon>
+              <span>${this._localize("dialog.manage_shipment")}</span>
+              <ha-icon class="chevron" icon="mdi:chevron-down"></ha-icon>
+            </summary>
+            <div class="manage-options">
+              ${dhlOptions.map(option => `
+              <a href="${option.link}" target="_blank" rel="noopener noreferrer">
+                <ha-icon icon="mdi:chevron-right"></ha-icon>
+                <span>${option.label}${option.description ? `<span class="manage-option-desc">${option.description}</span>` : ''}</span>
+              </a>`).join('')}
+            </div>
+          </details>
+        </div>`;
+    }
     
     if (manageShipmentButtonId) {
       this._prefetchManageShipmentUrl(manageShipmentButtonId, attrs, entityId);
@@ -1191,16 +1441,27 @@ class ShipmentTrackingCard extends HTMLElement {
     }
 
     const modalContent = this.querySelector('#modal-content');
-    modalContent.innerHTML = finalHtml;
+    if (this._lastModalContentHtml !== finalHtml) {
+      this._lastModalContentHtml = finalHtml;
+      modalContent.innerHTML = finalHtml;
 
-    const qrContainer = modalContent.querySelector('.qr-code-container');
-    if (qrContainer) {
-      qrContainer.addEventListener('click', () => {
-        const largeUrl = qrContainer.getAttribute('data-large-qr');
-        const fullscreenOverlay = this.querySelector('#qr-fullscreen');
-        this.querySelector('#qr-fullscreen-img').src = largeUrl;
-        fullscreenOverlay.classList.add('open');
-      });
+      const manageAccordion = modalContent.querySelector('.manage-accordion');
+      if (manageAccordion) {
+        manageAccordion.open = this._manageAccordionOpen === true;
+        manageAccordion.addEventListener('toggle', () => {
+          this._manageAccordionOpen = manageAccordion.open;
+        });
+      }
+
+      const qrContainer = modalContent.querySelector('.qr-code-container');
+      if (qrContainer) {
+        qrContainer.addEventListener('click', () => {
+          const largeUrl = qrContainer.getAttribute('data-large-qr');
+          const fullscreenOverlay = this.querySelector('#qr-fullscreen');
+          this.querySelector('#qr-fullscreen-img').src = largeUrl;
+          fullscreenOverlay.classList.add('open');
+        });
+      }
     }
 
     if (reopen) {
@@ -1251,6 +1512,7 @@ class ShipmentTrackingCard extends HTMLElement {
     });
 
     const configSignature = [
+      this._isEnabled("show_list_sender"),
       this._isEnabled("show_list_pickup_code"),
       this._isEnabled("show_list_location")
     ].join('|');
@@ -1274,7 +1536,9 @@ class ShipmentTrackingCard extends HTMLElement {
         if (state === 'unavailable') return;
 
         const attributes = stateObj.attributes;
-        const friendlyName = attributes.sender || attributes.sender_name || attributes.recipient_name || attributes.tracking_number;
+        const friendlyName = this._isEnabled("show_list_sender")
+          ? (attributes.sender || attributes.sender_name || attributes.recipient_name || attributes.tracking_number)
+          : attributes.tracking_number;
         const courier = attributes.courier || attributes.attribution || (entityId.includes('inpost') ? 'InPost' : defaultCourier);
         
         const isTrackingName = friendlyName === attributes.tracking_number;
@@ -1389,6 +1653,11 @@ class ShipmentTrackingCardEditor extends HTMLElement {
         selector: { text: {} }
       },
       {
+        name: "show_list_sender",
+        label: this._localize("editor.show_list_sender"),
+        selector: { boolean: {} }
+      },
+      {
         name: "show_list_pickup_code",
         label: this._localize("editor.show_list_pickup_code"),
         selector: { boolean: {} }
@@ -1396,6 +1665,16 @@ class ShipmentTrackingCardEditor extends HTMLElement {
       {
         name: "show_list_location",
         label: this._localize("editor.show_list_location"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_tracking_number",
+        label: this._localize("editor.show_dialog_tracking_number"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_courier",
+        label: this._localize("editor.show_dialog_courier"),
         selector: { boolean: {} }
       },
       {
@@ -1426,6 +1705,36 @@ class ShipmentTrackingCardEditor extends HTMLElement {
       {
         name: "show_dialog_navigation",
         label: this._localize("editor.show_dialog_navigation"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_delivery_address",
+        label: this._localize("editor.show_dialog_delivery_address"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_package_type",
+        label: this._localize("editor.show_dialog_package_type"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_courier_contact",
+        label: this._localize("editor.show_dialog_courier_contact"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_delivery_method",
+        label: this._localize("editor.show_dialog_delivery_method"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_parcel_shop_type",
+        label: this._localize("editor.show_dialog_parcel_shop_type"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_live_tracking",
+        label: this._localize("editor.show_dialog_live_tracking"),
         selector: { boolean: {} }
       },
       {
@@ -1467,14 +1776,23 @@ class ShipmentTrackingCardEditor extends HTMLElement {
 
     const data = { ...this._config };
     const booleanDefaults = [
+      "show_list_sender",
       "show_list_pickup_code",
       "show_list_location",
+      "show_dialog_tracking_number",
+      "show_dialog_courier",
       "show_dialog_sender",
       "show_dialog_account_contact",
       "show_dialog_recipient",
       "show_dialog_pickup_code",
       "show_dialog_pickup_point",
       "show_dialog_navigation",
+      "show_dialog_delivery_address",
+      "show_dialog_package_type",
+      "show_dialog_courier_contact",
+      "show_dialog_delivery_method",
+      "show_dialog_parcel_shop_type",
+      "show_dialog_live_tracking",
       "show_dialog_cod",
       "show_dialog_delivery_date",
       "show_dialog_parcel_size",
