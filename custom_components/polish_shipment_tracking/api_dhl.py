@@ -116,5 +116,6 @@ class DhlApi:
         )
 
     async def get_parcel(self, shipment_number: str):
+        # The details endpoint only accepts POST; GET answers 405.
         encoded = urllib.parse.quote(str(shipment_number), safe="")
-        return await self.request("GET", f"user/shipment/v2/details/{encoded}")
+        return await self.request("POST", f"user/shipment/v2/details/{encoded}", {})
