@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, INTEGRATION_VERSION, CONF_PHONE, CONF_EMAIL
 from .coordinator import ShipmentCoordinator
 from .helpers import (
+    count_ready_for_pickup,
     get_parcel_id,
     get_raw_status,
     is_delivered,
@@ -25,6 +26,11 @@ from .helpers import (
 _LOGGER = logging.getLogger(__name__)
 
 ACTIVE_SHIPMENTS_UNIQUE_ID = f"{DOMAIN}_active_shipments"
+READY_FOR_PICKUP_SHIPMENTS_UNIQUE_ID = f"{DOMAIN}_ready_for_pickup_shipments"
+
+
+def _account_ready_for_pickup_unique_id(entry: ConfigEntry) -> str:
+    return f"{entry.entry_id}_ready_for_pickup"
 
 @callback
 def _ensure_pending_events_listener(hass: HomeAssistant) -> None:
@@ -61,15 +67,25 @@ async def async_setup_entry(
     """Set up the sensor platform."""
     coordinator: ShipmentCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    # Handle global active shipments sensor
+    # Shared count sensors aggregate all configured couriers and accounts.
+    global_entities = []
     if "_active_shipments_sensor" not in hass.data[DOMAIN]:
         global_sensor = ActiveShipmentsSensor(hass)
         hass.data[DOMAIN]["_active_shipments_sensor"] = global_sensor
-        async_add_entities([global_sensor])
-    
-    global_sensor = hass.data[DOMAIN]["_active_shipments_sensor"]
-    global_sensor.attach_coordinator(coordinator)
-    entry.async_on_unload(lambda: global_sensor.detach_coordinator(coordinator))
+        global_entities.append(global_sensor)
+    if "_ready_for_pickup_shipments_sensor" not in hass.data[DOMAIN]:
+        ready_global_sensor = ReadyForPickupShipmentsSensor(hass)
+        hass.data[DOMAIN]["_ready_for_pickup_shipments_sensor"] = ready_global_sensor
+        global_entities.append(ready_global_sensor)
+    global_entities.append(ReadyForPickupAccountSensor(coordinator))
+    async_add_entities(global_entities)
+
+    for key in ("_active_shipments_sensor", "_ready_for_pickup_shipments_sensor"):
+        global_sensor = hass.data[DOMAIN][key]
+        global_sensor.attach_coordinator(coordinator)
+        entry.async_on_unload(
+            lambda sensor=global_sensor: sensor.detach_coordinator(coordinator)
+        )
 
     @callback
     def _build_new_shipment_event_data(sensor: "ShipmentSensor") -> dict[str, Any]:
@@ -162,6 +178,11 @@ def _async_remove_old_entities(
     """Remove entities that are no longer in the active parcels list."""
     registry = async_get_entity_registry(hass)
     current_unique_ids = {f"{coordinator.courier}_{pid}" for pid in current_ids}
+    current_unique_ids.update({
+        ACTIVE_SHIPMENTS_UNIQUE_ID,
+        READY_FOR_PICKUP_SHIPMENTS_UNIQUE_ID,
+        _account_ready_for_pickup_unique_id(entry),
+    })
     
     entities_to_remove = []
     for entity_entry in registry.entities.values():
@@ -171,7 +192,6 @@ def _async_remove_old_entities(
             # Buttons have their own lifecycle in button.py; their unique_ids
             # never match sensor ones, so they would be removed every cycle.
             and entity_entry.domain == "sensor"
-            and entity_entry.unique_id != ACTIVE_SHIPMENTS_UNIQUE_ID
             and entity_entry.unique_id not in current_unique_ids
         ):
             entities_to_remove.append(entity_entry.entity_id)
@@ -562,7 +582,18 @@ class ActiveShipmentsSensor(SensorEntity):
         if coordinator in self._coordinators:
             unregister = self._coordinators.pop(coordinator)
             unregister()
-            self.async_write_ha_state()
+            if self._coordinators:
+                self.async_write_ha_state()
+            else:
+                # The owning config entry unloads its entity platform. Drop
+                # this cached entity so a subsequent setup can add it again.
+                domain_data = self.hass.data.get(DOMAIN, {})
+                for key in (
+                    "_active_shipments_sensor",
+                    "_ready_for_pickup_shipments_sensor",
+                ):
+                    if domain_data.get(key) is self:
+                        domain_data.pop(key)
 
     @property
     def native_value(self) -> int:
@@ -574,3 +605,52 @@ class ActiveShipmentsSensor(SensorEntity):
                 if not is_delivered(parcel, coordinator.courier):
                     total += 1
         return total
+
+
+class ReadyForPickupShipmentsSensor(ActiveShipmentsSensor):
+    """Count ready parcels across all configured accounts and couriers."""
+
+    _attr_icon = "mdi:package-variant"
+    _attr_translation_key = "ready_for_pickup_shipments"
+    _attr_unique_id = READY_FOR_PICKUP_SHIPMENTS_UNIQUE_ID
+    _attr_suggested_object_id = f"{DOMAIN}_ready_for_pickup_shipments"
+
+    @property
+    def native_value(self) -> int:
+        return sum(
+            count_ready_for_pickup(coordinator.data or [], coordinator.courier)
+            for coordinator in self._coordinators
+        )
+
+
+class ReadyForPickupAccountSensor(CoordinatorEntity[ShipmentCoordinator], SensorEntity):
+    """Count ready parcels for one courier account/config entry."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:package-variant"
+    _attr_translation_key = "ready_for_pickup_account"
+
+    def __init__(self, coordinator: ShipmentCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = _account_ready_for_pickup_unique_id(coordinator.entry)
+        account_id = coordinator.entry.data.get(CONF_PHONE) or coordinator.entry.data.get(CONF_EMAIL)
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, coordinator.entry.entry_id)},
+            name=f"{coordinator.courier.title()} ({account_id})",
+            manufacturer="Polish Shipment Tracking",
+            model=coordinator.courier.title(),
+            sw_version=INTEGRATION_VERSION,
+        )
+
+    @property
+    def native_value(self) -> int:
+        return count_ready_for_pickup(self.coordinator.data or [], self.coordinator.courier)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Expose account identity without marking the count as a parcel."""
+        return {
+            "courier": self.coordinator.courier,
+            "account_contact": self.coordinator.entry.data.get(CONF_PHONE)
+            or self.coordinator.entry.data.get(CONF_EMAIL),
+        }
