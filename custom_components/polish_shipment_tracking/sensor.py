@@ -97,6 +97,21 @@ async def async_setup_entry(
         )
         new_entities = []
         registry = async_get_entity_registry(hass)
+
+        # Terminal parcels have already been filtered out of coordinator.data.
+        # Publish their transitions while the old entity ID still exists.
+        pending_events = coordinator.pending_lifecycle_events
+        coordinator.pending_lifecycle_events = []
+        for event_name, event_data in pending_events:
+            parcel_id = event_data["shipment_id"]
+            entity_id = registry.async_get_entity_id(
+                "sensor", DOMAIN, f"{coordinator.courier}_{parcel_id}"
+            )
+            _queue_or_fire_event(
+                hass,
+                f"{DOMAIN}_{event_name}",
+                {**event_data, "entity_id": entity_id},
+            )
         
         current_ids = set()
         for parcel in current_data:

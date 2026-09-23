@@ -26,7 +26,7 @@ from .const import (
     CONF_SESSION_ID,
     CONF_SESSION_REGISTERED,
 )
-from .helpers import get_parcel_detail_id, get_parcel_id
+from .helpers import get_departed_parcel_events, get_parcel_detail_id, get_parcel_id
 from .helpers import is_delivered
 
 _LOGGER = logging.getLogger(__name__)
@@ -39,6 +39,7 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         self.entry = entry
         self.courier = entry.data[CONF_COURIER]
         self.known_parcels = set()
+        self.pending_lifecycle_events: list[tuple[str, dict]] = []
         self.add_entities_callback = None
         
         super().__init__(
@@ -119,6 +120,9 @@ class ShipmentCoordinator(DataUpdateCoordinator):
             parcels = await self._fetch_parcels_with_retry()
             self._persist_auth_if_changed()
             filtered = self._filter_active_parcels(parcels)
+            self.pending_lifecycle_events = get_departed_parcel_events(
+                self.data, parcels, self.courier
+            )
             return filtered
         except Exception as err:
             _LOGGER.error("Error fetching data for %s: %s", self.courier, err)
@@ -441,7 +445,11 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         if not replaced:
             current_data.append(parcel)
 
-        self.async_set_updated_data(self._filter_active_parcels(current_data))
+        filtered = self._filter_active_parcels(current_data)
+        self.pending_lifecycle_events = get_departed_parcel_events(
+            self.data, current_data, self.courier
+        )
+        self.async_set_updated_data(filtered)
 
     async def _refresh_token(self):
         """Refresh API token and update config entry."""

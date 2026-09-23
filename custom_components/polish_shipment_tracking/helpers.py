@@ -1,5 +1,5 @@
 """Helper functions for Polish Shipment Tracking."""
-from .const import DOMAIN
+
 
 def get_parcel_id(data: dict, courier: str) -> str | None:
     """Extract parcel ID from data based on courier."""
@@ -393,3 +393,67 @@ def is_delivered(data: dict, courier: str) -> bool:
         return True
     status_key = normalize_status(get_raw_status(data, courier), courier)
     return status_key in {"delivered", "returned", "cancelled"}
+
+
+def get_departed_parcel_events(
+    previous: list[dict] | None, current: list[dict], courier: str
+) -> list[tuple[str, dict]]:
+    """Describe tracked parcels that became terminal or left the carrier feed.
+
+    The coordinator exposes only active parcels, so this comparison must happen
+    against the fresh, unfiltered response before terminal parcels are dropped.
+    A parcel missing from the feed has no known final status and is not reported
+    as delivered.
+    """
+    if previous is None or not isinstance(current, list):
+        return []
+
+    current_by_id = {}
+    for parcel in current:
+        if isinstance(parcel, dict):
+            parcel_id = get_parcel_id(parcel, courier)
+            if parcel_id is not None:
+                current_by_id[str(parcel_id)] = parcel
+
+    events = []
+    for old_parcel in previous:
+        if not isinstance(old_parcel, dict):
+            continue
+        parcel_id = get_parcel_id(old_parcel, courier)
+        if parcel_id is None:
+            continue
+
+        parcel_id = str(parcel_id)
+        new_parcel = current_by_id.get(parcel_id)
+        if new_parcel is not None and not is_delivered(new_parcel, courier):
+            continue
+
+        old_raw_status = get_raw_status(old_parcel, courier)
+        event_data = {
+            "courier": courier,
+            "shipment_id": parcel_id,
+            "old_status_raw": old_raw_status,
+            "old_status_key": normalize_status(old_raw_status, courier),
+        }
+        if new_parcel is not None:
+            new_raw_status = get_raw_status(new_parcel, courier)
+            new_status_key = normalize_status(new_raw_status, courier)
+            if new_status_key in {"delivered", "returned", "cancelled"}:
+                events.append(
+                    (
+                        "shipment_status_changed",
+                        {
+                            **event_data,
+                            "new_status_raw": new_raw_status,
+                            "new_status_key": new_status_key,
+                        },
+                    )
+                )
+                continue
+            reason = "archived"
+        else:
+            reason = "missing_from_feed"
+
+        events.append(("shipment_removed", {**event_data, "reason": reason}))
+
+    return events

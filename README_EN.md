@@ -87,6 +87,8 @@ The integration fires events on the `hass.bus`:
 
 - `polish_shipment_tracking_new_shipment` - new shipment detected
 - `polish_shipment_tracking_shipment_status_changed` - shipment status changed
+- `polish_shipment_tracking_shipment_removed` - a tracked shipment disappeared
+  from the carrier feed or was archived without a known terminal status
 
 Example payload:
 
@@ -106,6 +108,12 @@ For `polish_shipment_tracking_shipment_status_changed`, additional fields are pr
 - `old_status_key`
 - `new_status_raw`
 - `new_status_key`
+
+Terminal status changes (`delivered`, `returned`, `cancelled`) are emitted before
+the shipment sensor is removed. When the carrier omits the shipment entirely,
+the integration emits `polish_shipment_tracking_shipment_removed` instead of
+guessing a final status. That event includes the old status and a `reason` of
+`missing_from_feed` or `archived`.
 
 ## Status normalization
 
