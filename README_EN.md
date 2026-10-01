@@ -111,9 +111,11 @@ For `polish_shipment_tracking_shipment_status_changed`, additional fields are pr
 
 Terminal status changes (`delivered`, `returned`, `cancelled`) are emitted before
 the shipment sensor is removed. When the carrier omits the shipment entirely,
-the integration emits `polish_shipment_tracking_shipment_removed` instead of
-guessing a final status. That event includes the old status and a `reason` of
-`missing_from_feed` or `archived`.
+the integration waits for two consecutive successful polls before emitting
+`polish_shipment_tracking_shipment_removed`, rather than guessing a final
+status from one incomplete response. The parcel sensor remains available
+during the first miss. The event includes the old status and a `reason` of
+`missing_from_feed` or `archived` (for an explicit Pocztex archive marker).
 
 ## Status normalization
 

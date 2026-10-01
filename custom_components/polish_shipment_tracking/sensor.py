@@ -16,6 +16,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, INTEGRATION_VERSION, CONF_PHONE, CONF_EMAIL
 from .coordinator import ShipmentCoordinator
 from .helpers import (
+    get_shipment_entity_id,
     get_parcel_id,
     get_raw_status,
     is_delivered,
@@ -104,8 +105,8 @@ async def async_setup_entry(
         coordinator.pending_lifecycle_events = []
         for event_name, event_data in pending_events:
             parcel_id = event_data["shipment_id"]
-            entity_id = registry.async_get_entity_id(
-                "sensor", DOMAIN, f"{coordinator.courier}_{parcel_id}"
+            entity_id = get_shipment_entity_id(
+                registry, DOMAIN, coordinator.courier, entry.entry_id, parcel_id
             )
             _queue_or_fire_event(
                 hass,

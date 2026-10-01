@@ -114,9 +114,11 @@ Dla `polish_shipment_tracking_shipment_status_changed` dodatkowo występują pol
 
 Zmiany na status końcowy (`delivered`, `returned`, `cancelled`) są zgłaszane
 przed usunięciem czujnika przesyłki. Jeśli kurier całkowicie pomija przesyłkę,
-integracja emituje `polish_shipment_tracking_shipment_removed` bez zgadywania
-statusu końcowego. To zdarzenie zawiera poprzedni status i pole `reason`
-o wartości `missing_from_feed` lub `archived`.
+integracja czeka na dwa kolejne udane odpytywania przed emisją zdarzenia
+`polish_shipment_tracking_shipment_removed`, zamiast wnioskować o stanie
+końcowym z jednej niepełnej odpowiedzi. Czujnik przesyłki pozostaje dostępny
+po pierwszym braku. Zdarzenie zawiera poprzedni status i pole `reason`
+o wartości `missing_from_feed` lub `archived` (dla znacznika archiwizacji Pocztex).
 
 ## Statusy (normalizacja)
 
