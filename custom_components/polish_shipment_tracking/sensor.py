@@ -14,23 +14,72 @@ from homeassistant.helpers.entity_registry import async_get as async_get_entity_
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, INTEGRATION_VERSION, CONF_PHONE, CONF_EMAIL
+from .button import _build_device_info
 from .coordinator import ShipmentCoordinator
 from .helpers import (
-    count_ready_for_pickup,
     get_parcel_id,
     get_raw_status,
     is_delivered,
     normalize_status,
 )
+from .helpers import count_ready_for_pickup
 
 _LOGGER = logging.getLogger(__name__)
 
 ACTIVE_SHIPMENTS_UNIQUE_ID = f"{DOMAIN}_active_shipments"
 READY_FOR_PICKUP_SHIPMENTS_UNIQUE_ID = f"{DOMAIN}_ready_for_pickup_shipments"
+SHARED_SENSOR_KEYS = ("_active_shipments_sensor", "_ready_for_pickup_shipments_sensor")
 
 
 def _account_ready_for_pickup_unique_id(entry: ConfigEntry) -> str:
     return f"{entry.entry_id}_ready_for_pickup"
+
+
+@callback
+def _set_shared_sensor_registry_owner(hass: HomeAssistant, entry_id: str) -> None:
+    """Associate existing global sensor registry entries with their host."""
+    registry = async_get_entity_registry(hass)
+    for unique_id in (ACTIVE_SHIPMENTS_UNIQUE_ID, READY_FOR_PICKUP_SHIPMENTS_UNIQUE_ID):
+        if entity_id := registry.async_get_entity_id("sensor", DOMAIN, unique_id):
+            registry.async_update_entity(entity_id, config_entry_id=entry_id)
+
+
+@callback
+def _shared_sensor_host_unloaded(hass: HomeAssistant, entry_id: str) -> None:
+    """Move shared sensors to a surviving entry when their owner unloads."""
+    domain_data = hass.data[DOMAIN]
+    hosts = domain_data["_shared_sensor_hosts"]
+    hosts.pop(entry_id, None)
+    if domain_data.get("_shared_sensor_owner") != entry_id:
+        return
+
+    old_sensors = [domain_data.pop(key) for key in SHARED_SENSOR_KEYS]
+    domain_data.pop("_shared_sensor_owner", None)
+    for sensor in old_sensors:
+        sensor.release_coordinators()
+
+    if not hosts:
+        domain_data.pop("_shared_sensor_hosts", None)
+        return
+
+    new_owner, (_, add_entities) = next(iter(hosts.items()))
+    replacement = (ActiveShipmentsSensor(hass), ReadyForPickupShipmentsSensor(hass))
+    for key, sensor in zip(SHARED_SENSOR_KEYS, replacement):
+        domain_data[key] = sensor
+        for coordinator, _ in hosts.values():
+            sensor.attach_coordinator(coordinator)
+
+    # Registry ownership must follow the platform that now provides the entity.
+    _set_shared_sensor_registry_owner(hass, new_owner)
+    domain_data["_shared_sensor_owner"] = new_owner
+    add_entities(list(replacement))
+
+
+@callback
+def _detach_shared_sensor(domain_data: dict, key: str, coordinator: ShipmentCoordinator) -> None:
+    """Detach from the current shared entity, if one is still registered."""
+    if sensor := domain_data.get(key):
+        sensor.detach_coordinator(coordinator)
 
 @callback
 def _ensure_pending_events_listener(hass: HomeAssistant) -> None:
@@ -66,26 +115,32 @@ async def async_setup_entry(
 ) -> None:
     """Set up the sensor platform."""
     coordinator: ShipmentCoordinator = hass.data[DOMAIN][entry.entry_id]
+    domain_data = hass.data[DOMAIN]
+    domain_data.setdefault("_shared_sensor_hosts", {})[entry.entry_id] = (
+        coordinator, async_add_entities
+    )
 
     # Shared count sensors aggregate all configured couriers and accounts.
     global_entities = []
-    if "_active_shipments_sensor" not in hass.data[DOMAIN]:
+    if "_shared_sensor_owner" not in domain_data:
         global_sensor = ActiveShipmentsSensor(hass)
-        hass.data[DOMAIN]["_active_shipments_sensor"] = global_sensor
+        domain_data["_active_shipments_sensor"] = global_sensor
         global_entities.append(global_sensor)
-    if "_ready_for_pickup_shipments_sensor" not in hass.data[DOMAIN]:
         ready_global_sensor = ReadyForPickupShipmentsSensor(hass)
-        hass.data[DOMAIN]["_ready_for_pickup_shipments_sensor"] = ready_global_sensor
+        domain_data["_ready_for_pickup_shipments_sensor"] = ready_global_sensor
         global_entities.append(ready_global_sensor)
+        domain_data["_shared_sensor_owner"] = entry.entry_id
+        _set_shared_sensor_registry_owner(hass, entry.entry_id)
     global_entities.append(ReadyForPickupAccountSensor(coordinator))
     async_add_entities(global_entities)
 
-    for key in ("_active_shipments_sensor", "_ready_for_pickup_shipments_sensor"):
-        global_sensor = hass.data[DOMAIN][key]
+    for key in SHARED_SENSOR_KEYS:
+        global_sensor = domain_data[key]
         global_sensor.attach_coordinator(coordinator)
         entry.async_on_unload(
-            lambda sensor=global_sensor: sensor.detach_coordinator(coordinator)
+            lambda key=key: _detach_shared_sensor(domain_data, key, coordinator)
         )
+    entry.async_on_unload(lambda: _shared_sensor_host_unloaded(hass, entry.entry_id))
 
     @callback
     def _build_new_shipment_event_data(sensor: "ShipmentSensor") -> dict[str, Any]:
@@ -584,16 +639,12 @@ class ActiveShipmentsSensor(SensorEntity):
             unregister()
             if self._coordinators:
                 self.async_write_ha_state()
-            else:
-                # The owning config entry unloads its entity platform. Drop
-                # this cached entity so a subsequent setup can add it again.
-                domain_data = self.hass.data.get(DOMAIN, {})
-                for key in (
-                    "_active_shipments_sensor",
-                    "_ready_for_pickup_shipments_sensor",
-                ):
-                    if domain_data.get(key) is self:
-                        domain_data.pop(key)
+
+    def release_coordinators(self) -> None:
+        """Stop listeners when this platform's shared entity is removed."""
+        for unregister in self._coordinators.values():
+            unregister()
+        self._coordinators.clear()
 
     @property
     def native_value(self) -> int:
@@ -633,14 +684,7 @@ class ReadyForPickupAccountSensor(CoordinatorEntity[ShipmentCoordinator], Sensor
     def __init__(self, coordinator: ShipmentCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = _account_ready_for_pickup_unique_id(coordinator.entry)
-        account_id = coordinator.entry.data.get(CONF_PHONE) or coordinator.entry.data.get(CONF_EMAIL)
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, coordinator.entry.entry_id)},
-            name=f"{coordinator.courier.title()} ({account_id})",
-            manufacturer="Polish Shipment Tracking",
-            model=coordinator.courier.title(),
-            sw_version=INTEGRATION_VERSION,
-        )
+        self._attr_device_info = _build_device_info(coordinator)
 
     @property
     def native_value(self) -> int:
