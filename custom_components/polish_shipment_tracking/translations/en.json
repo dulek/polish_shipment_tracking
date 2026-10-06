@@ -31,6 +31,18 @@
           "phone": "Phone number",
           "password": "Password"
         }
+      },
+      "allegro_cookie": {
+        "description": "**⚠️ Experimental.** Allegro has no public API for buyers, so the integration uses your browser session (the `QXLSESSID` cookie). It may stop working when Allegro changes its website.\n\n**How to get the cookie:**\n1. Sign in at [allegro.pl]({allegro_url}) in a desktop browser.\n2. Press **F12** to open the developer tools.\n3. Firefox: **Storage** tab → **Cookies** → `{allegro_url}`. Chrome / Edge: **Application** tab → **Cookies** → `{allegro_url}`.\n4. Find the **QXLSESSID** row and copy the value from the **Value** column.\n5. Paste it below.\n\nThe cookie gives access to your Allegro account, never share it. Signing out of Allegro in that browser may invalidate the session. When the session expires, paste a new cookie in the account options (**Configure**).",
+        "data": {
+          "cookie": "QXLSESSID cookie"
+        }
+      },
+      "reauth_confirm": {
+        "description": "Your Allegro session has expired. Sign in at [allegro.pl]({allegro_url}), copy the new **QXLSESSID** cookie the same way as when adding the account (F12 → Storage / Application → Cookies → `{allegro_url}`) and paste it below.",
+        "data": {
+          "cookie": "QXLSESSID cookie"
+        }
       }
     },
     "error": {
@@ -39,7 +51,8 @@
       "unknown": "Unexpected error occurred."
     },
     "abort": {
-      "already_configured": "Account is already configured."
+      "already_configured": "Account is already configured.",
+      "reauth_successful": "The Allegro session has been updated."
     }
   },
   "entity": {
@@ -61,6 +74,21 @@
       "active_shipments": {
         "name": "Active shipments"
       }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "description": "Recipient filters, one pattern per line (or comma separated). A pattern matches the recipient phone number (last 9 digits), name or address, including the pickup point address; letter case and Polish characters are ignored. Include: only parcels matching any pattern are shown. Exclude: parcels matching any pattern are hidden. Parcels with no recipient data are always shown.",
+        "data": {
+          "include_recipients": "Show only parcels for",
+          "exclude_recipients": "Hide parcels for",
+          "cookie": "New QXLSESSID cookie (Allegro, leave empty to keep the current one)"
+        }
+      }
+    },
+    "error": {
+      "auth_error": "Authentication failed. Please check your credentials."
     }
   }
 }

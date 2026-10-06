@@ -10,14 +10,17 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, INTEGRATION_VERSION, CONF_PHONE, CONF_EMAIL
+from .const import DOMAIN, INTEGRATION_VERSION, CONF_EMAIL, SIGNAL_ALLEGRO_ORDERS_UPDATED
 from .coordinator import ShipmentCoordinator
 from .helpers import (
     get_shipment_entity_id,
+    get_account_label,
     get_parcel_id,
+    get_parcel_tracking_numbers,
     get_raw_status,
     is_delivered,
     normalize_status,
@@ -178,7 +181,7 @@ def _async_remove_old_entities(
     """Remove entities that are no longer in the active parcels list."""
     registry = async_get_entity_registry(hass)
     current_unique_ids = {f"{coordinator.courier}_{pid}" for pid in current_ids}
-    
+
     entities_to_remove = []
     for entity_entry in registry.entities.values():
         if (
@@ -216,18 +219,33 @@ class ShipmentSensor(CoordinatorEntity[ShipmentCoordinator], SensorEntity):
         # We also add "Parcel" (Paczka) as in the example
         parcel_word = "Paczka" if coordinator.hass.config.language == "pl" else "Parcel"
         self._attr_name = f"{self._courier.title()} {parcel_word} {tracking_number}"
+        if self._courier == "allegro":
+            # Order ids are long UUIDs; the first item title says far more.
+            offers = parcel_data.get("offers") or []
+            title = (offers[0].get("title") if offers and isinstance(offers[0], dict) else None) or tracking_number
+            self._attr_name = str(title)[:60]
         self._attr_unique_id = f"{self._courier}_{tracking_number}"
         self._attr_translation_key = "shipment_status"
         self.parcel_data = parcel_data
 
-        account_id = coordinator.entry.data.get(CONF_PHONE) or coordinator.entry.data.get(CONF_EMAIL)
+        account_id = get_account_label(coordinator.entry.data)
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, coordinator.entry.entry_id)},
-            name=f"{self._courier.title()} ({account_id})",
+            name=f"{self._courier.title()} ({account_id})" if account_id else self._courier.title(),
             manufacturer="Polish Shipment Tracking",
             model=self._courier.title(),
             sw_version=INTEGRATION_VERSION,
         )
+
+    async def async_added_to_hass(self) -> None:
+        """Also refresh when Allegro learns which order this parcel belongs to."""
+        await super().async_added_to_hass()
+        if self._courier != "allegro":
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass, SIGNAL_ALLEGRO_ORDERS_UPDATED, self.async_write_ha_state
+                )
+            )
 
     @property
     def native_value(self) -> str:
@@ -266,7 +284,12 @@ class ShipmentSensor(CoordinatorEntity[ShipmentCoordinator], SensorEntity):
             self._add_pocztex_attributes(attrs)
         elif self._courier == "gls":
             self._add_gls_attributes(attrs)
-            
+        elif self._courier == "allegro":
+            self._add_allegro_attributes(attrs)
+
+        if self._courier != "allegro":
+            self._add_allegro_order_attributes(attrs)
+
         return attrs
 
     def _get_account_contact(self) -> str | None:
@@ -274,7 +297,8 @@ class ShipmentSensor(CoordinatorEntity[ShipmentCoordinator], SensorEntity):
         entry_data = self.coordinator.entry.data
         if self._courier == "pocztex":
             return entry_data.get(CONF_EMAIL)
-        return entry_data.get(CONF_PHONE) or entry_data.get(CONF_EMAIL)
+        # get_account_label drops Allegro's generated "client:<id>" login.
+        return get_account_label(entry_data)
 
     def _add_inpost_attributes(self, attrs: dict) -> None:
         """Add InPost specific attributes."""
@@ -366,6 +390,8 @@ class ShipmentSensor(CoordinatorEntity[ShipmentCoordinator], SensorEntity):
             attrs["timeline_step"] = data["timelineStep"]
         if data.get("step"):
             attrs["current_step"] = data["step"]
+        if data.get("description"):
+            attrs["current_step_description"] = data["description"]
 
         # PIN doubles as the code shown at lockers and DHL POP points, but it is
         # only worth showing once it is actually needed - DHL returns it from
@@ -442,6 +468,58 @@ class ShipmentSensor(CoordinatorEntity[ShipmentCoordinator], SensorEntity):
         ).strip()
         parts = [street or None, courier_info.get("city")]
         return ", ".join(str(part) for part in parts if part) or None
+
+    def _add_allegro_attributes(self, attrs: dict) -> None:
+        """Add Allegro order attributes."""
+        data = self.parcel_data
+        _set_allegro_order_attrs(attrs, data, prefix="")
+        if data.get("seller"):
+            attrs["sender"] = data["seller"]
+        if data.get("statusLabel"):
+            attrs["status_label"] = data["statusLabel"]
+        if data.get("deliveryName"):
+            attrs["delivery_method"] = data["deliveryName"]
+        if data.get("pickupCode"):
+            attrs["pickup_code"] = data["pickupCode"]
+        if data.get("deliveryEstimate"):
+            attrs["delivery_estimate"] = data["deliveryEstimate"]
+        if data.get("timeline"):
+            attrs["timeline"] = data["timeline"]
+        if data.get("pickupPointLocation"):
+            attrs["pickup_point_location"] = data["pickupPointLocation"]
+        if data.get("pickupPointHours"):
+            attrs["pickup_point_hours"] = data["pickupPointHours"]
+        recipient = data.get("recipient")
+        if isinstance(recipient, dict) and recipient.get("name"):
+            attrs["recipient_name"] = recipient["name"]
+
+        waybills = [w for w in data.get("waybills") or [] if isinstance(w, dict)]
+        if waybills:
+            attrs["waybill"] = waybills[0].get("number")
+            attrs["carrier"] = waybills[0].get("carrier_name") or waybills[0].get("carrier_id")
+            attrs["tracking_url"] = waybills[0].get("url")
+            attrs["waybills"] = waybills
+
+        point = data.get("pickupPoint")
+        if isinstance(point, dict):
+            address = point.get("address") if isinstance(point.get("address"), dict) else {}
+            parts = [point.get("name"), address.get("street"), address.get("code"), address.get("city")]
+            location = ", ".join(str(part) for part in parts if part)
+            if location:
+                attrs["location"] = location
+
+    def _add_allegro_order_attributes(self, attrs: dict) -> None:
+        """Show what was bought when an Allegro order ships with this parcel."""
+        numbers = get_parcel_tracking_numbers(self.parcel_data, self._courier)
+        if not numbers:
+            return
+        for coordinator in self.coordinator.hass.data.get(DOMAIN, {}).values():
+            if not isinstance(coordinator, ShipmentCoordinator) or coordinator.courier != "allegro":
+                continue
+            for order in coordinator.allegro_orders:
+                if get_parcel_tracking_numbers(order, "allegro") & numbers:
+                    _set_allegro_order_attrs(attrs, order, prefix="allegro_")
+                    return
 
     def _add_pocztex_attributes(self, attrs: dict) -> None:
         """Add Pocztex specific attributes."""
@@ -550,6 +628,26 @@ class ShipmentSensor(CoordinatorEntity[ShipmentCoordinator], SensorEntity):
             # If not found, it might be delivered or removed. 
             # The async_update_parcels listener will handle removal.
             pass
+
+def _set_allegro_order_attrs(attrs: dict, order: dict, prefix: str) -> None:
+    """Order details shared by Allegro sensors and carrier parcels they link to."""
+    attrs[f"{prefix}order_id"] = order.get("orderId")
+    attrs[f"{prefix}order_date"] = order.get("orderDate")
+    attrs[f"{prefix}seller"] = order.get("seller")
+    attrs[f"{prefix}items"] = [
+        offer.get("title") for offer in order.get("offers") or [] if isinstance(offer, dict) and offer.get("title")
+    ]
+    attrs[f"{prefix}offers"] = [offer for offer in order.get("offers") or [] if isinstance(offer, dict)]
+    total = order.get("totalCost")
+    if isinstance(total, dict) and total.get("amount"):
+        attrs[f"{prefix}total_cost"] = total.get("amount")
+        attrs[f"{prefix}currency"] = total.get("currency")
+    images = [
+        offer.get("image_url") for offer in order.get("offers") or [] if isinstance(offer, dict) and offer.get("image_url")
+    ]
+    if images:
+        attrs[f"{prefix}image_url"] = images[0]
+
 
 class ActiveShipmentsSensor(SensorEntity):
     """Sensor that counts active shipments across all accounts."""

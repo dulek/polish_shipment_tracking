@@ -10,9 +10,9 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_EMAIL, CONF_PHONE, DOMAIN, INTEGRATION_VERSION
+from .const import DOMAIN, INTEGRATION_VERSION
 from .coordinator import ShipmentCoordinator
-from .helpers import get_parcel_id, is_delivered
+from .helpers import get_account_label, get_parcel_id, is_delivered
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -138,10 +138,10 @@ def _get_manage_unique_id(courier: str, tracking_number: str) -> str:
 
 
 def _build_device_info(coordinator: ShipmentCoordinator) -> DeviceInfo:
-    account_id = coordinator.entry.data.get(CONF_PHONE) or coordinator.entry.data.get(CONF_EMAIL)
+    account_id = get_account_label(coordinator.entry.data)
     return DeviceInfo(
         identifiers={(DOMAIN, coordinator.entry.entry_id)},
-        name=f"{coordinator.courier.title()} ({account_id})",
+        name=f"{coordinator.courier.title()} ({account_id})" if account_id else coordinator.courier.title(),
         manufacturer="Polish Shipment Tracking",
         model=coordinator.courier.title(),
         sw_version=INTEGRATION_VERSION,

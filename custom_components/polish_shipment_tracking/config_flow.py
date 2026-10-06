@@ -4,7 +4,9 @@ import uuid
 import json
 import logging
 from homeassistant import config_entries
+from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.selector import TextSelector, TextSelectorConfig
 
 from .const import (
     DOMAIN,
@@ -20,12 +22,35 @@ from .const import (
     CONF_ID_TOKEN,
     CONF_SESSION_ID,
     CONF_SESSION_REGISTERED,
+    CONF_COOKIE,
+    CONF_LOGIN,
+    CONF_INCLUDE_RECIPIENTS,
+    CONF_EXCLUDE_RECIPIENTS,
 )
 from .api_helpers import normalize_phone
+from .helpers import get_account_label
 
 _LOGGER = logging.getLogger(__name__)
 
-COURIERS = ["inpost", "dpd", "dhl", "pocztex", "gls"]
+COURIERS = ["inpost", "dpd", "dhl", "pocztex", "gls", "allegro"]
+
+# hassfest rejects URLs inside translation strings.
+ALLEGRO_PLACEHOLDERS = {"allegro_url": "https://allegro.pl"}
+
+
+async def _async_validate_allegro_cookie(hass, cookie: str) -> str:
+    """Return the Allegro login for a QXLSESSID cookie, raising when invalid."""
+    from .api_allegro import AllegroApi
+    api = AllegroApi(async_get_clientsession(hass), cookie)
+    return await api.get_login()
+
+
+def _clean_cookie(value) -> str:
+    """Accept both the bare value and a pasted "QXLSESSID=..." pair."""
+    cookie = str(value or "").strip()
+    if cookie.upper().startswith("QXLSESSID="):
+        cookie = cookie.split("=", 1)[1]
+    return cookie.split(";", 1)[0].strip()
 
 class ShipmentTrackingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
@@ -46,6 +71,8 @@ class ShipmentTrackingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_pocztex_credentials()
             if self.courier == "gls":
                 return await self.async_step_gls_credentials()
+            if self.courier == "allegro":
+                return await self.async_step_allegro_cookie()
             return await self.async_step_phone()
 
         return self.async_show_form(
@@ -173,6 +200,70 @@ class ShipmentTrackingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_reauth(self, entry_data):
+        """Started by HA when the Allegro session cookie stops working."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input=None):
+        errors = {}
+
+        if user_input is not None:
+            cookie = _clean_cookie(user_input[CONF_COOKIE])
+            try:
+                await _async_validate_allegro_cookie(self.hass, cookie)
+            except Exception as e:
+                _LOGGER.warning("Allegro cookie validation failed: %s", e)
+                errors["base"] = "auth_error"
+            else:
+                return self.async_update_reload_and_abort(
+                    self._get_reauth_entry(),
+                    data_updates={CONF_COOKIE: cookie},
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema({
+                vol.Required(CONF_COOKIE): str,
+            }),
+            errors=errors,
+            description_placeholders=ALLEGRO_PLACEHOLDERS,
+        )
+
+    async def async_step_allegro_cookie(self, user_input=None):
+        errors = {}
+
+        if user_input is not None:
+            cookie = _clean_cookie(user_input[CONF_COOKIE])
+            try:
+                login = await _async_validate_allegro_cookie(self.hass, cookie)
+            except Exception as e:
+                _LOGGER.warning("Allegro cookie validation failed: %s", e)
+                errors["base"] = "auth_error"
+            else:
+                label = get_account_label({CONF_LOGIN: login})
+                return self.async_create_entry(
+                    title=f"ALLEGRO ({label})" if label else "ALLEGRO",
+                    data={
+                        CONF_COURIER: self.courier,
+                        CONF_LOGIN: login,
+                        CONF_COOKIE: cookie,
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="allegro_cookie",
+            data_schema=vol.Schema({
+                vol.Required(CONF_COOKIE): str,
+            }),
+            errors=errors,
+            description_placeholders=ALLEGRO_PLACEHOLDERS,
+        )
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        return ShipmentTrackingOptionsFlow()
+
     async def async_step_sms(self, user_input=None):
         errors = {}
         
@@ -205,13 +296,12 @@ class ShipmentTrackingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 elif self.courier == "dhl":
                     from .api_dhl import DhlApi
                     api = DhlApi(session)
-                    data = await api.validate_code(self.phone, code, self.device_uid)
-                    token = data.get("accessToken") or data.get("data", {}).get("accessToken")
-                    
+                    await api.validate_code(self.phone, code, self.device_uid)
+
                     # Persist cookies so they survive restarts.
                     cookies_json = json.dumps(api._cookies)
                     tokens = {
-                        CONF_TOKEN: token,
+                        CONF_TOKEN: api._token,
                         "cookies": cookies_json
                     }
 
@@ -236,4 +326,56 @@ class ShipmentTrackingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             }),
             errors=errors,
             description_placeholders={"phone": self.phone}
+        )
+
+
+class ShipmentTrackingOptionsFlow(config_entries.OptionsFlow):
+    """Per-account options: recipient filters, and the Allegro session cookie."""
+
+    async def async_step_init(self, user_input=None):
+        errors = {}
+        entry = self.config_entry
+        is_allegro = entry.data.get(CONF_COURIER) == "allegro"
+
+        if user_input is not None:
+            new_cookie = _clean_cookie(user_input.pop(CONF_COOKIE, ""))
+            if is_allegro and new_cookie:
+                try:
+                    await _async_validate_allegro_cookie(self.hass, new_cookie)
+                except Exception as e:
+                    _LOGGER.warning("Allegro cookie validation failed: %s", e)
+                    errors["base"] = "auth_error"
+                else:
+                    self.hass.config_entries.async_update_entry(
+                        entry, data={**entry.data, CONF_COOKIE: new_cookie}
+                    )
+            if not errors:
+                return self.async_create_entry(
+                    title="",
+                    data={
+                        CONF_INCLUDE_RECIPIENTS: user_input.get(CONF_INCLUDE_RECIPIENTS, "").strip(),
+                        CONF_EXCLUDE_RECIPIENTS: user_input.get(CONF_EXCLUDE_RECIPIENTS, "").strip(),
+                    },
+                )
+
+        # suggested_value rather than default: with a default, clearing the
+        # field submits nothing and the old value comes back.
+        multiline = TextSelector(TextSelectorConfig(multiline=True))
+        schema = {
+            vol.Optional(
+                CONF_INCLUDE_RECIPIENTS,
+                description={"suggested_value": entry.options.get(CONF_INCLUDE_RECIPIENTS, "")},
+            ): multiline,
+            vol.Optional(
+                CONF_EXCLUDE_RECIPIENTS,
+                description={"suggested_value": entry.options.get(CONF_EXCLUDE_RECIPIENTS, "")},
+            ): multiline,
+        }
+        if is_allegro:
+            schema[vol.Optional(CONF_COOKIE)] = str
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(schema),
+            errors=errors,
         )

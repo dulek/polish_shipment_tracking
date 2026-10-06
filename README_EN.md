@@ -29,6 +29,7 @@ Home Assistant integration for tracking shipments from popular carriers in Polan
 - DPD
 - Pocztex
 - GLS
+- Allegro (orders, experimental)
 
 > [!WARNING]
 > The integration relies on unofficial APIs used by carrier apps/services. These APIs may change without notice.
@@ -67,6 +68,39 @@ Home Assistant integration for tracking shipments from popular carriers in Polan
 4. Save
 
 Sensor entities should appear after the first refresh.
+
+### Allegro (experimental)
+
+Allegro has no public API for buyers, so the integration uses your browser
+session (the `QXLSESSID` cookie):
+
+1. Sign in at [allegro.pl](https://allegro.pl) in a desktop browser.
+2. Press F12. Firefox: Storage tab -> Cookies -> `https://allegro.pl`.
+   Chrome / Edge: Application tab -> Cookies -> `https://allegro.pl`.
+3. Copy the value of the `QXLSESSID` cookie and paste it when adding the Allegro account.
+
+When the session expires, Home Assistant shows a reauthentication notification.
+Paste a new cookie there.
+
+Every Allegro order is a separate sensor with products, seller, timeline and
+pickup point. When a carrier account (for example InPost) already tracks the
+parcel, no Allegro sensor is created. Instead, the carrier parcel gets
+`allegro_items`, `allegro_seller`, `allegro_order_id` and other attributes, and
+the card shows the ordered products.
+
+### Recipient filters
+
+Each account's options (Configure) have:
+
+- Show only parcels for: only parcels matching any pattern are shown,
+- Hide parcels for: parcels matching any pattern are hidden.
+
+One pattern per line (or comma separated). A pattern matches the recipient
+phone number (the last 9 digits are compared, so the format does not matter),
+name or address, including the pickup point address. Letter case and Polish
+characters are ignored. A parcel is hidden only when the carrier provides data
+to decide on. For example, a phone pattern does not hide a parcel whose carrier
+does not report the recipient phone number.
 
 ## Entities
 
