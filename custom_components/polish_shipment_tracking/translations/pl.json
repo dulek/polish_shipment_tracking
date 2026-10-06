@@ -31,6 +31,18 @@
           "phone": "Numer telefonu",
           "password": "Hasło"
         }
+      },
+      "allegro_cookie": {
+        "description": "**⚠️ Funkcja eksperymentalna.** Allegro nie ma publicznego API dla kupujących, więc integracja korzysta z Twojej sesji z przeglądarki (ciasteczko `QXLSESSID`). Może przestać działać, gdy Allegro zmieni swoją stronę.\n\n**Jak zdobyć ciasteczko:**\n1. Zaloguj się na [allegro.pl](https://allegro.pl) w przeglądarce na komputerze.\n2. Naciśnij **F12**, żeby otworzyć narzędzia deweloperskie.\n3. Firefox: zakładka **Storage** (Dane) → **Cookies** → `https://allegro.pl`. Chrome / Edge: zakładka **Application** (Aplikacja) → **Cookies** → `https://allegro.pl`.\n4. Znajdź wiersz **QXLSESSID** i skopiuj wartość z kolumny **Value**.\n5. Wklej ją poniżej.\n\nCiasteczko daje dostęp do Twojego konta Allegro, nie udostępniaj go nikomu. Wylogowanie z Allegro w tej przeglądarce może unieważnić sesję. Gdy sesja wygaśnie, wklej nowe ciasteczko w opcjach konta (**Konfiguruj**).",
+        "data": {
+          "cookie": "Ciasteczko QXLSESSID"
+        }
+      },
+      "reauth_confirm": {
+        "description": "Sesja Allegro wygasła. Zaloguj się na [allegro.pl](https://allegro.pl), skopiuj nowe ciasteczko **QXLSESSID** tak samo jak przy dodawaniu konta (F12 → Storage / Application → Cookies → `https://allegro.pl`) i wklej je poniżej.",
+        "data": {
+          "cookie": "Ciasteczko QXLSESSID"
+        }
       }
     },
     "error": {
@@ -39,7 +51,8 @@
       "unknown": "Wystąpił nieoczekiwany błąd."
     },
     "abort": {
-      "already_configured": "Konto jest już skonfigurowane."
+      "already_configured": "Konto jest już skonfigurowane.",
+      "reauth_successful": "Sesja Allegro została zaktualizowana."
     }
   },
   "entity": {
@@ -61,6 +74,21 @@
       "active_shipments": {
         "name": "Aktywne przesyłki"
       }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "description": "Filtry odbiorcy, jeden wzorzec w linii (lub po przecinku). Wzorzec pasuje do numeru telefonu odbiorcy (ostatnie 9 cyfr), imienia i nazwiska albo adresu, także adresu punktu odbioru; wielkość liter i polskie znaki nie mają znaczenia. Pokazuj tylko: widoczne są wyłącznie paczki pasujące do któregoś wzorca. Ukryj: paczki pasujące do któregoś wzorca są ukrywane. Paczki bez danych odbiorcy są zawsze widoczne.",
+        "data": {
+          "include_recipients": "Pokazuj tylko paczki dla",
+          "exclude_recipients": "Ukryj paczki dla",
+          "cookie": "Nowe ciasteczko QXLSESSID (Allegro, zostaw puste, by nie zmieniać)"
+        }
+      }
+    },
+    "error": {
+      "auth_error": "Błąd uwierzytelniania. Sprawdź swoje dane."
     }
   }
 }

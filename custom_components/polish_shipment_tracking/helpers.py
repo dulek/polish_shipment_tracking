@@ -13,6 +13,8 @@ def get_parcel_id(data: dict, courier: str) -> str | None:
         return _pick_pocztex_id(data)
     if courier == "gls":
         return _pick_gls_id(data)
+    if courier == "allegro":
+        return data.get("orderId")
     return None
 
 def get_parcel_detail_id(data: dict, courier: str) -> str | None:
@@ -76,6 +78,8 @@ def get_raw_status(parcel_data: dict, courier: str) -> str | None:
         return _pick_pocztex_status(parcel_data)
     if courier == "gls":
         return _pick_gls_status(parcel_data)
+    if courier == "allegro":
+        return parcel_data.get("status")
     return None
 
 def _pick_pocztex_status(parcel_data):
@@ -329,6 +333,23 @@ _STATUS_MAP = {
         "MULTIPACK": "in_transport",
         "UNAVAILABLE": "exception",
     },
+    "allegro": {
+        "NEW": "created",
+        "IN_PREPARATION": "created",
+        "PROCESSING": "created",
+        "READY_FOR_PROCESSING": "created",
+        "READY_FOR_SHIPMENT": "created",
+        "SENT": "in_transport",
+        "IN_TRANSIT": "in_transport",
+        "IN_DELIVERY": "handed_out_for_delivery",
+        "AVAILABLE_FOR_PICKUP": "waiting_for_pickup",
+        "DELIVERED": "delivered",
+        "PICKED_UP": "delivered",
+        "COMPLETED": "delivered",
+        "RETURNED": "returned",
+        "ORDER_CANCELLED": "cancelled",
+        "CANCELLED": "cancelled",
+    },
 }
 
 def normalize_status(raw_status, courier):
@@ -383,6 +404,11 @@ def normalize_status(raw_status, courier):
     if any(x in status_lower for x in ["created", "pre-transit", "label", "confirmed", "info received", "ready to send"]):
         return "created"
 
+    # Allegro lists orders before they ship (paid, being packed...) under
+    # codes we have not seen yet; those are still orders to wait for.
+    if courier == "allegro":
+        return "created"
+
     return "unknown"
 
 def is_delivered(data: dict, courier: str) -> bool:
@@ -395,3 +421,294 @@ def is_delivered(data: dict, courier: str) -> bool:
         return True
     status_key = normalize_status(get_raw_status(data, courier), courier)
     return status_key in {"delivered", "returned", "cancelled"}
+
+
+def normalize_allegro_orders(payload) -> list[dict]:
+    """Flatten the Allegro myorders response into one parcel dict per order.
+
+    A group bundles orders from one checkout; every order inside has its own
+    seller, delivery and status, so each becomes a separate parcel.
+    """
+    if not isinstance(payload, dict):
+        return []
+    parcels = []
+    for group in payload.get("orderGroups") or []:
+        if not isinstance(group, dict):
+            continue
+        for order in group.get("myorders") or []:
+            if not isinstance(order, dict) or not order.get("id"):
+                continue
+            if order.get("hiddenInMyOrders"):
+                continue
+            status = order.get("status") if isinstance(order.get("status"), dict) else {}
+            primary = status.get("primary") if isinstance(status.get("primary"), dict) else {}
+            custom = status.get("primaryCustom") if isinstance(status.get("primaryCustom"), dict) else {}
+            delivery = order.get("delivery") if isinstance(order.get("delivery"), dict) else {}
+            waybills_data = delivery.get("waybillsData") if isinstance(delivery.get("waybillsData"), dict) else {}
+
+            waybills = []
+            pickup_code = None
+            for waybill in waybills_data.get("waybills") or []:
+                if not isinstance(waybill, dict) or not waybill.get("waybillId"):
+                    continue
+                carrier = waybill.get("carrier") if isinstance(waybill.get("carrier"), dict) else {}
+                waybills.append({
+                    "number": str(waybill["waybillId"]),
+                    "carrier_id": carrier.get("id"),
+                    "carrier_name": carrier.get("name"),
+                    "url": carrier.get("url"),
+                })
+                code = waybill.get("pickupCode")
+                if isinstance(code, dict) and code.get("code") and not pickup_code:
+                    pickup_code = code.get("code")
+
+            raw_status = primary.get("status") or delivery.get("status")
+            if order.get("cancelled"):
+                raw_status = "ORDER_CANCELLED"
+
+            seller = order.get("seller") if isinstance(order.get("seller"), dict) else {}
+            offers = []
+            for offer in order.get("offers") or []:
+                if not isinstance(offer, dict):
+                    continue
+                unit_price = offer.get("unitPrice") if isinstance(offer.get("unitPrice"), dict) else {}
+                offers.append({
+                    "title": offer.get("title"),
+                    "quantity": offer.get("quantity"),
+                    "url": offer.get("friendlyUrl"),
+                    "image_url": offer.get("imageUrl"),
+                    "unit_price": unit_price.get("amount"),
+                    "currency": unit_price.get("currency"),
+                })
+
+            parcels.append({
+                "orderId": str(order["id"]),
+                "groupId": group.get("groupId"),
+                "status": raw_status,
+                "statusLabel": custom.get("label"),
+                "orderDate": order.get("orderDate"),
+                "seller": seller.get("login"),
+                "offers": offers,
+                "deliveryName": delivery.get("name"),
+                "deliveredBy": delivery.get("deliveredBy"),
+                "deliveryStatusDate": delivery.get("timestamp"),
+                "pickupPoint": delivery.get("generalDelivery"),
+                "pickupCode": pickup_code,
+                "waybills": waybills,
+                "totalCost": order.get("totalCost"),
+                "_raw_response": order,
+            })
+    return parcels
+
+
+def merge_allegro_details(parcel: dict, details) -> dict:
+    """Add recipient, timeline and point coordinates from the order details call."""
+    if not isinstance(details, dict):
+        return parcel
+    order = next(
+        (
+            item
+            for item in details.get("myorders") or []
+            if isinstance(item, dict) and str(item.get("id")) == parcel.get("orderId")
+        ),
+        None,
+    )
+    if order is None:
+        return parcel
+    merged = dict(parcel)
+    delivery = order.get("delivery") if isinstance(order.get("delivery"), dict) else {}
+
+    # Only the delivery address describes the recipient; the details also carry
+    # the seller's address and phone, which must never reach the filters.
+    address = delivery.get("address") if isinstance(delivery.get("address"), dict) else {}
+    name = " ".join(part for part in (address.get("firstName"), address.get("lastName")) if part)
+    recipient = {
+        "name": name or None,
+        "street": address.get("street"),
+        "zipCode": address.get("zipCode"),
+        "city": address.get("city"),
+        "phoneNumber": address.get("phoneNumber"),
+    }
+    merged["recipient"] = {key: value for key, value in recipient.items() if value}
+
+    timelines = [item for item in order.get("timelines") or [] if isinstance(item, dict)]
+    if timelines:
+        timeline = timelines[0]
+        merged["timeline"] = [
+            {
+                "label": step.get("label"),
+                "hint": step.get("hint"),
+                "active": bool(step.get("active")),
+                "error": bool(step.get("error")),
+            }
+            for step in timeline.get("steps") or []
+            if isinstance(step, dict)
+        ]
+        estimate = [
+            detail.get("value")
+            for detail in timeline.get("details") or []
+            if isinstance(detail, dict) and detail.get("type") == "TEXT" and detail.get("value")
+        ]
+        if estimate:
+            merged["deliveryEstimate"] = " ".join(estimate)
+        point = (timeline.get("pickup") or {}).get("point") if isinstance(timeline.get("pickup"), dict) else None
+        if isinstance(point, dict):
+            coordinates = point.get("coordinates") if isinstance(point.get("coordinates"), dict) else {}
+            if coordinates.get("lat") and coordinates.get("lon"):
+                merged["pickupPointLocation"] = {"lat": coordinates["lat"], "lon": coordinates["lon"]}
+            hours = [
+                item.get("value")
+                for item in point.get("openingTimes") or []
+                if isinstance(item, dict) and item.get("value")
+            ]
+            if hours:
+                merged["pickupPointHours"] = ", ".join(hours)
+    return merged
+
+
+def get_account_label(entry_data: dict) -> str | None:
+    """Human account identifier used in device and entity names."""
+    label = entry_data.get("phone") or entry_data.get("email") or entry_data.get("login")
+    # Allegro accounts without a nickname log in as "client:<id>", which only
+    # clutters entity ids.
+    if isinstance(label, str) and label.lower().startswith("client:"):
+        return None
+    return label
+
+
+def normalize_tracking_number(value) -> str:
+    """Canonical form used to match one parcel across accounts."""
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def get_parcel_tracking_numbers(parcel: dict, courier: str) -> set[str]:
+    """Every tracking number a parcel is known under, normalized.
+
+    Carriers expose a few aliases (GLS shipmentNo/trackingId, Pocztex
+    consignment number), and Allegro may reference any of them.
+    """
+    if not isinstance(parcel, dict):
+        return set()
+    if courier == "allegro":
+        values = [waybill.get("number") for waybill in parcel.get("waybills") or []]
+    else:
+        values = [get_parcel_id(parcel, courier)]
+        sources = [parcel]
+        if isinstance(parcel.get("trackingShipment"), dict):
+            sources.append(parcel["trackingShipment"])
+        for source in sources:
+            for key in (
+                "shipmentNumber",
+                "shipmentNo",
+                "trackingId",
+                "trackingNumber",
+                "consignmentNumber",
+                "waybill",
+                "parcelNumber",
+            ):
+                if isinstance(source.get(key), (str, int)):
+                    values.append(source[key])
+    return {number for number in map(normalize_tracking_number, values) if len(number) >= 6}
+
+
+# Keys whose subtree describes who receives the parcel or where it goes.
+_RECIPIENT_KEYS = (
+    "receiver",
+    "recipient",
+    "courierdeliveryshipmentinfo",
+    "deliveryaddress",
+    "delivery_address",
+    "consignee",
+    "pickuppoint",
+    "lockerinfo",
+    "dhlpointinfo",
+    "parcelshop",
+    "point",
+)
+
+
+def _fold_text(value) -> str:
+    text = str(value or "").lower()
+    text = text.translate(str.maketrans("ąćęłńóśżź", "acelnoszz"))
+    return " ".join(text.split())
+
+
+def _collect_strings(value, out: list[str]) -> None:
+    if isinstance(value, dict):
+        for item in value.values():
+            _collect_strings(item, out)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_strings(item, out)
+    elif isinstance(value, (str, int)) and not isinstance(value, bool):
+        out.append(str(value))
+
+
+def get_recipient_texts(parcel: dict) -> list[str]:
+    """Collect recipient name, phone and address strings from any carrier payload."""
+    texts: list[str] = []
+
+    def _walk(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                folded = str(key).lower()
+                if any(marker in folded for marker in _RECIPIENT_KEYS):
+                    _collect_strings(item, texts)
+                elif isinstance(item, (dict, list)):
+                    _walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                _walk(item)
+
+    _walk(parcel)
+    return texts
+
+
+def parse_recipient_patterns(value) -> list[str]:
+    """Split the options text (lines or commas) into patterns."""
+    if not value:
+        return []
+    if isinstance(value, list):
+        parts = value
+    else:
+        parts = str(value).replace(",", "\n").splitlines()
+    return [part.strip() for part in parts if part and part.strip()]
+
+
+def _digits(text: str) -> str:
+    return "".join(ch for ch in str(text) if ch.isdigit())
+
+
+def _pattern_matches(pattern: str, texts: list[str]) -> bool | None:
+    """True/False for a match, None when the parcel has no data to decide on."""
+    digits = _digits(pattern)
+    if len(digits) >= 6 and not any(ch.isalpha() for ch in pattern):
+        # Phone numbers: compare the last 9 digits so +48 / spaces don't matter.
+        phones = [_digits(text) for text in texts if len(_digits(text)) >= 9]
+        if not phones:
+            return None
+        wanted = digits[-9:]
+        return any(wanted in phone for phone in phones)
+    if not texts:
+        return None
+    folded = _fold_text(pattern)
+    return any(folded in _fold_text(text) for text in texts)
+
+
+def matches_recipient_filters(parcel: dict, include: list[str], exclude: list[str]) -> bool:
+    """Return False when the parcel is filtered out by the account options.
+
+    A parcel is only hidden on evidence: when the carrier gives no phone
+    number (Allegro lists only the pickup point, for example), phone patterns
+    cannot rule it out and the parcel stays visible.
+    """
+    if not include and not exclude:
+        return True
+    texts = get_recipient_texts(parcel)
+    if any(_pattern_matches(pattern, texts) for pattern in exclude):
+        return False
+    if include:
+        results = [_pattern_matches(pattern, texts) for pattern in include]
+        if not any(results) and None not in results:
+            return False
+    return True
