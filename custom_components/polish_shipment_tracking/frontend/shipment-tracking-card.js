@@ -32,9 +32,22 @@ const CARD_TRANSLATIONS = {
     "editor.show_dialog_timeline": "Show timeline in details",
     "editor.show_dialog_manage_button": "Show manage button in details",
     "editor.show_dialog_entity_button": "Show entity button in details",
+    "dialog.allegro_total": "Total",
+    "editor.show_list_allegro_items": "Show Allegro products in list",
+    "editor.show_dialog_allegro_items": "Show Allegro products in details",
+    "editor.show_dialog_allegro_images": "Show Allegro product images",
+    "editor.show_dialog_allegro_prices": "Show Allegro product prices",
+    "editor.show_dialog_allegro_seller": "Show Allegro seller",
+    "editor.show_dialog_allegro_total": "Show Allegro order total",
+    "editor.show_dialog_allegro_order_date": "Show Allegro order date",
+    "editor.show_dialog_allegro_shipment": "Show Allegro shipment number and tracking link",
     "dialog.sender": "Sender",
     "dialog.account_contact": "Shipment For",
     "dialog.recipient": "Recipient",
+    "dialog.allegro_order": "Allegro order",
+    "dialog.allegro_ordered": "Ordered",
+    "dialog.allegro_shipment": "Shipment",
+    "dialog.allegro_track": "Track parcel",
     "dialog.pickup_code": "Pickup Code",
     "dialog.pickup_point": "Pickup Point",
     "dialog.navigate": "Navigate",
@@ -71,6 +84,8 @@ const CARD_TRANSLATIONS = {
     "dpd.HANDED_OVER_FOR_DELIVERY": "Out for delivery",
     "dpd.HANDED_OVER_FOR_DELIVERY_PUDO": "Out for delivery to pickup point",
     "dpd.READY_TO_PICK_UP_PUDO": "Ready for pickup",
+    "dpd.HANDED_OVER_FOR_DELIVERY_SP": "Out for delivery to parcel locker",
+    "dpd.READY_TO_PICK_UP_SP": "Ready for pickup",
     "dpd.RECEIVED_IN_DEPOT": "Received in depot",
     "dpd.IN_TRANSPORT": "In transit",
     "dpd.RECEIVED_FROM_SENDER": "Received from sender",
@@ -113,9 +128,22 @@ const CARD_TRANSLATIONS = {
     "editor.show_dialog_timeline": "Pokaż historię przesyłki w szczegółach",
     "editor.show_dialog_manage_button": "Pokaż przycisk zarządzania w szczegółach",
     "editor.show_dialog_entity_button": "Pokaż przycisk encji w szczegółach",
+    "dialog.allegro_total": "Razem",
+    "editor.show_list_allegro_items": "Pokaż produkty Allegro na liście",
+    "editor.show_dialog_allegro_items": "Pokaż produkty Allegro w szczegółach",
+    "editor.show_dialog_allegro_images": "Pokaż zdjęcia produktów Allegro",
+    "editor.show_dialog_allegro_prices": "Pokaż ceny produktów Allegro",
+    "editor.show_dialog_allegro_seller": "Pokaż sprzedawcę Allegro",
+    "editor.show_dialog_allegro_total": "Pokaż sumę zamówienia Allegro",
+    "editor.show_dialog_allegro_order_date": "Pokaż datę zamówienia Allegro",
+    "editor.show_dialog_allegro_shipment": "Pokaż numer i link śledzenia przesyłki Allegro",
     "dialog.sender": "Nadawca",
     "dialog.account_contact": "Przesyłka na",
     "dialog.recipient": "Odbiorca",
+    "dialog.allegro_order": "Zamówienie Allegro",
+    "dialog.allegro_ordered": "Zamówiono",
+    "dialog.allegro_shipment": "Przesyłka",
+    "dialog.allegro_track": "Śledź przesyłkę",
     "dialog.pickup_code": "Kod odbioru",
     "dialog.pickup_point": "Punkt odbioru",
     "dialog.navigate": "Nawiguj",
@@ -152,6 +180,8 @@ const CARD_TRANSLATIONS = {
     "dpd.HANDED_OVER_FOR_DELIVERY": "Wydana do doręczenia",
     "dpd.HANDED_OVER_FOR_DELIVERY_PUDO": "Wydana do doręczenia do punktu odbioru",
     "dpd.READY_TO_PICK_UP_PUDO": "Gotowa do odbioru",
+    "dpd.HANDED_OVER_FOR_DELIVERY_SP": "Wydana do doręczenia do automatu",
+    "dpd.READY_TO_PICK_UP_SP": "Gotowa do odbioru",
     "dpd.RECEIVED_IN_DEPOT": "Przyjęta w oddziale",
     "dpd.IN_TRANSPORT": "W drodze",
     "dpd.RECEIVED_FROM_SENDER": "Odebrana od nadawcy",
@@ -427,8 +457,9 @@ class ShipmentTrackingCard extends HTMLElement {
             display: flex; flex-direction: column; align-items: center; justify-content: center;
             background: #ffffff; padding: 16px; border-radius: 12px; margin-top: 16px;
             border: 2px solid var(--primary-color); cursor: pointer;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1); transition: transform 0.2s;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1); transition: transform 0.2s, box-shadow 0.2s;
           }
+          .qr-code-container:hover { transform: scale(1.08); box-shadow: 0 8px 22px rgba(0,0,0,0.18); }
           .qr-code-container:active { transform: scale(0.98); }
           .qr-code-container img {
             width: 150px; height: 150px; image-rendering: crisp-edges;
@@ -890,8 +921,95 @@ class ShipmentTrackingCard extends HTMLElement {
     if (n.includes('inpost')) return 'mdi:locker';
     if (n.includes('dhl') || n.includes('ups') || n.includes('fedex')) return 'mdi:truck-fast';
     if (n.includes('gls')) return 'mdi:truck-delivery-outline';
+    if (n.includes('allegro')) return 'mdi:shopping-outline';
     if (n.includes('pocztex') || n.includes('poczta')) return 'mdi:post-outline';
     return 'mdi:package-variant-closed';
+  }
+
+  _allegroItems(attrs) {
+    const items = attrs.items || attrs.allegro_items;
+    return Array.isArray(items) ? items.filter(Boolean) : [];
+  }
+
+  _escapeHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[ch]));
+  }
+
+  _formatMoney(amount, currency) {
+    const value = Number(amount);
+    if (amount === null || amount === undefined || amount === '' || Number.isNaN(value)) return '';
+    try {
+      return value.toLocaleString(this._hass?.language || 'pl', { style: 'currency', currency: currency || 'PLN' });
+    } catch (e) {
+      return `${value.toFixed(2)} ${currency || ''}`.trim();
+    }
+  }
+
+  _renderAllegroInfo(attrs) {
+    // Allegro orders, and carrier parcels matched to an Allegro order.
+    const isAllegro = String(attrs.courier || '').toLowerCase() === 'allegro';
+    const offers = Array.isArray(attrs.offers) ? attrs.offers : (Array.isArray(attrs.allegro_offers) ? attrs.allegro_offers : []);
+    const items = this._allegroItems(attrs);
+    if (!offers.length && !items.length) return '';
+    const on = (key) => this._isEnabled(key);
+    const esc = (value) => this._escapeHtml(value);
+    const row = (label, value) => `<div class="modal-info-block-row"><strong>${label}:</strong> <span class="val">${value}</span></div>`;
+
+    let productsHtml;
+    if (offers.length) {
+      productsHtml = offers.map((offer) => {
+        const title = esc(offer.title || '');
+        const link = typeof offer.url === 'string' && offer.url.startsWith('https://')
+          ? `<a href="${esc(offer.url)}" target="_blank" rel="noopener noreferrer" style="color: inherit;">${title}</a>`
+          : title;
+        const img = on("show_dialog_allegro_images") && typeof offer.image_url === 'string' && offer.image_url.startsWith('https://')
+          ? `<img src="${esc(offer.image_url.replace('/original/', '/s128/'))}" alt="" loading="lazy" style="width: 48px; height: 48px; object-fit: contain; border-radius: 8px; background: #fff; flex-shrink: 0;">`
+          : '';
+        const price = on("show_dialog_allegro_prices") ? this._formatMoney(offer.unit_price, offer.currency) : '';
+        const qty = Number(offer.quantity) > 1 ? `${offer.quantity} × ` : '';
+        return `<div style="display: flex; gap: 10px; align-items: center; margin: 6px 0;">
+            ${img}
+            <div style="min-width: 0;">
+              <div style="line-height: 1.3;">${link}</div>
+              ${price ? `<div style="opacity: 0.7; font-size: 0.9em;">${qty}${esc(price)}</div>` : ''}
+            </div>
+          </div>`;
+      }).join('');
+    } else {
+      productsHtml = items.map((item) => esc(item)).join('<br>');
+    }
+
+    // Allegro sensors already list the seller as the parcel sender.
+    const seller = !isAllegro && on("show_dialog_allegro_seller") && attrs.allegro_seller ? ` · ${esc(attrs.allegro_seller)}` : '';
+    let html = '';
+    if (on("show_dialog_allegro_items")) {
+      html += `<div class="modal-info-block-row" style="flex-direction: column; align-items: stretch;"><strong>${this._localize("dialog.allegro_order")}${seller}</strong>${productsHtml}</div>`;
+    }
+
+    const total = this._formatMoney(attrs.total_cost ?? attrs.allegro_total_cost, attrs.currency ?? attrs.allegro_currency);
+    if (total && on("show_dialog_allegro_total")) html += row(this._localize("dialog.allegro_total"), esc(total));
+
+    const orderDate = attrs.order_date || attrs.allegro_order_date;
+    if (orderDate && on("show_dialog_allegro_order_date")) {
+      const date = new Date(orderDate);
+      const text = Number.isNaN(date.getTime())
+        ? orderDate
+        : date.toLocaleString(this._hass.language || 'pl', { dateStyle: 'short', timeStyle: 'short' });
+      html += row(this._localize("dialog.allegro_ordered"), esc(text));
+    }
+
+    if (isAllegro) {
+      const shipment = attrs.carrier && attrs.waybill ? `${attrs.carrier} ${attrs.waybill}` : attrs.waybill;
+      if (shipment && on("show_dialog_allegro_shipment")) {
+        const value = typeof attrs.tracking_url === 'string' && attrs.tracking_url.startsWith('https://')
+          ? `<a href="${esc(attrs.tracking_url)}" target="_blank" rel="noopener noreferrer">${esc(shipment)}</a>`
+          : esc(shipment);
+        html += row(this._localize("dialog.allegro_shipment"), value);
+      }
+    }
+    return html;
   }
 
   getCourierImage(name) {
@@ -1005,6 +1123,7 @@ class ShipmentTrackingCard extends HTMLElement {
     if (this._isEnabled("show_dialog_pickup_code") && (attrs.pickup_code || attrs.open_code)) {
       infoHtml += `<div class="modal-info-block-row"><strong>${this._localize("dialog.pickup_code")}:</strong> <span class="val">${attrs.pickup_code || attrs.open_code}</span></div>`;
     }
+    infoHtml += this._renderAllegroInfo(attrs);
     
     let timelineHtml = '';
     let manageShipmentAvailable = false;
@@ -1187,6 +1306,14 @@ class ShipmentTrackingCard extends HTMLElement {
             locationContent += `<br><a href="https://maps.google.com/?q=${dpdPoint.latitude},${dpdPoint.longitude}" target="_blank" class="modal-nav-link"><ha-icon icon="mdi:map-marker-path"></ha-icon> ${this._localize("dialog.navigate")}</a>`;
           }
 
+          const allegroPoint = courier === 'allegro' ? attrs.pickup_point_location : null;
+          if (this._isEnabled("show_dialog_navigation") && allegroPoint?.lat && allegroPoint?.lon) {
+            locationContent += `<br><a href="https://maps.google.com/?q=${Number(allegroPoint.lat)},${Number(allegroPoint.lon)}" target="_blank" class="modal-nav-link"><ha-icon icon="mdi:map-marker-path"></ha-icon> ${this._localize("dialog.navigate")}</a>`;
+          }
+          if (courier === 'allegro' && attrs.pickup_point_hours) {
+            locationContent += `<br><span class="timeline-desc">${this._escapeHtml(attrs.pickup_point_hours)}</span>`;
+          }
+
           if (this._isEnabled("show_dialog_navigation") && courier === 'dhl' && raw.lockerInfo?.latitude && raw.lockerInfo?.longitude) {
             locationContent += `<br><a href="https://maps.google.com/?q=${raw.lockerInfo.latitude},${raw.lockerInfo.longitude}" target="_blank" class="modal-nav-link"><ha-icon icon="mdi:map-marker-path"></ha-icon> ${this._localize("dialog.navigate")}</a>`;
           }
@@ -1346,6 +1473,23 @@ class ShipmentTrackingCard extends HTMLElement {
                 : step);
             });
           }
+        } else if (courier === 'allegro' && Array.isArray(attrs.timeline) && attrs.timeline.length) {
+          // Allegro's own step list (paid, awaiting dispatch, on the way...):
+          // show the steps reached so far, newest first, like other couriers.
+          const steps = attrs.timeline;
+          let current = steps.map((step) => !!step.active).lastIndexOf(true);
+          if (current < 0) current = steps.length - 1;
+          steps.slice(0, current + 1).reverse().forEach((step, index) => {
+            const desc = index === 0 && attrs.delivery_estimate && this._isEnabled("show_dialog_delivery_date")
+              ? `<div class="timeline-desc">${this._escapeHtml(attrs.delivery_estimate)}</div>`
+              : '';
+            timelineHtml += `
+              <div class="timeline-item"${step.error ? ' style="color: var(--error-color);"' : ''}>
+                <div class="timeline-date">${this._escapeHtml(step.hint || '')}</div>
+                <div class="timeline-title">${this._escapeHtml(step.label || '')}</div>
+                ${desc}
+              </div>`;
+          });
         } else if (courier === 'gls' && Array.isArray(raw.trackingShipmentPackages)) {
           const glsEvents = [];
           raw.trackingShipmentPackages.forEach(pkg => {
@@ -1550,7 +1694,11 @@ class ShipmentTrackingCard extends HTMLElement {
             displayFriendlyName = `<span dir="ltr">${friendlyName}</span>`;
         }
 
-        const line2 = isTrackingName ? "" : attributes.tracking_number;
+        let line2 = isTrackingName ? "" : attributes.tracking_number;
+        if (String(attributes.courier || '').toLowerCase() === 'allegro') {
+          // Show the waybill instead of the long order UUID.
+          line2 = attributes.waybill || "";
+        }
         const displayLine2 = line2 ? `<span dir="ltr">${line2}</span>` : "";
 
         const imageUrl = this.getCourierImage(courier);
@@ -1574,6 +1722,11 @@ class ShipmentTrackingCard extends HTMLElement {
         }
         if (this._isEnabled("show_list_location") && location) {
              extraInfoHtml += `<div class="extra-info-text">${pickupPointLabel}: ${location}</div>`;
+        }
+        const allegroItems = this._allegroItems(attributes);
+        if (allegroItems.length && this._isEnabled("show_list_allegro_items")) {
+          const more = allegroItems.length > 1 ? ` (+${allegroItems.length - 1})` : '';
+          extraInfoHtml += `<div class="extra-info-text">Allegro: ${this._escapeHtml(allegroItems[0])}${more}</div>`;
         }
 
         html += `
@@ -1771,6 +1924,46 @@ class ShipmentTrackingCardEditor extends HTMLElement {
         name: "show_dialog_entity_button",
         label: this._localize("editor.show_dialog_entity_button"),
         selector: { boolean: {} }
+      },
+      {
+        name: "show_list_allegro_items",
+        label: this._localize("editor.show_list_allegro_items"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_allegro_items",
+        label: this._localize("editor.show_dialog_allegro_items"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_allegro_images",
+        label: this._localize("editor.show_dialog_allegro_images"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_allegro_prices",
+        label: this._localize("editor.show_dialog_allegro_prices"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_allegro_seller",
+        label: this._localize("editor.show_dialog_allegro_seller"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_allegro_total",
+        label: this._localize("editor.show_dialog_allegro_total"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_allegro_order_date",
+        label: this._localize("editor.show_dialog_allegro_order_date"),
+        selector: { boolean: {} }
+      },
+      {
+        name: "show_dialog_allegro_shipment",
+        label: this._localize("editor.show_dialog_allegro_shipment"),
+        selector: { boolean: {} }
       }
     ];
 
@@ -1799,7 +1992,15 @@ class ShipmentTrackingCardEditor extends HTMLElement {
       "show_dialog_qr_code",
       "show_dialog_timeline",
       "show_dialog_manage_button",
-      "show_dialog_entity_button"
+      "show_dialog_entity_button",
+      "show_list_allegro_items",
+      "show_dialog_allegro_items",
+      "show_dialog_allegro_images",
+      "show_dialog_allegro_prices",
+      "show_dialog_allegro_seller",
+      "show_dialog_allegro_total",
+      "show_dialog_allegro_order_date",
+      "show_dialog_allegro_shipment"
     ];
     booleanDefaults.forEach((key) => {
       if (data[key] === undefined) data[key] = true;

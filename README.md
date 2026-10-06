@@ -29,6 +29,7 @@ Integracja dla Home Assistant do śledzenia przesyłek u popularnych przewoźnik
 - DPD
 - Pocztex
 - GLS
+- Allegro (zamówienia, eksperymentalne)
 
 > [!WARNING]
 > Integracja korzysta z nieoficjalnych API aplikacji/serwisów przewoźników. Te API mogą ulec zmianie bez uprzedzenia.
@@ -68,6 +69,39 @@ Integracja dla Home Assistant do śledzenia przesyłek u popularnych przewoźnik
 
 Po pierwszym odświeżeniu powinny pojawić się encje `sensor` dla przesyłek.
 
+### Allegro (eksperymentalne)
+
+Allegro nie ma publicznego API dla kupujących, więc integracja korzysta z sesji
+z przeglądarki (ciasteczko `QXLSESSID`):
+
+1. Zaloguj się na [allegro.pl](https://allegro.pl) w przeglądarce na komputerze.
+2. Naciśnij F12. Firefox: zakładka Storage -> Cookies -> `https://allegro.pl`.
+   Chrome / Edge: zakładka Application -> Cookies -> `https://allegro.pl`.
+3. Skopiuj wartość ciasteczka `QXLSESSID` i wklej ją przy dodawaniu konta Allegro.
+
+Gdy sesja wygaśnie, Home Assistant pokaże powiadomienie o ponownym
+uwierzytelnieniu. Wystarczy wtedy wkleić nowe ciasteczko.
+
+Każde zamówienie Allegro jest osobnym sensorem z produktami, sprzedawcą, osią
+czasu i punktem odbioru. Jeśli paczkę z zamówienia śledzi już konto kuriera
+(np. InPost), sensor Allegro nie powstaje. Zamiast tego paczka kuriera dostaje
+atrybuty `allegro_items`, `allegro_seller`, `allegro_order_id` i inne, a karta
+pokazuje zamówione produkty.
+
+### Filtry odbiorcy
+
+W opcjach każdego konta (Konfiguruj) można ustawić:
+
+- Pokazuj tylko paczki dla: widoczne są tylko paczki pasujące do któregoś wzorca,
+- Ukryj paczki dla: paczki pasujące do któregoś wzorca są ukrywane.
+
+Jeden wzorzec w linii (lub po przecinku). Wzorzec pasuje do numeru telefonu
+odbiorcy (porównywane jest ostatnie 9 cyfr, więc format nie ma znaczenia),
+imienia i nazwiska albo adresu, także adresu punktu odbioru. Wielkość liter i
+polskie znaki nie mają znaczenia. Paczka jest ukrywana tylko wtedy, gdy
+przewoźnik podaje dane, które pozwalają to rozstrzygnąć. Na przykład wzorzec
+telefonu nie ukryje paczki, dla której przewoźnik nie podaje numeru odbiorcy.
+
 ## Encje
 
 Integracja tworzy encję `sensor` dla każdej aktywnej (niedostarczonej) przesyłki.
@@ -97,6 +131,8 @@ Integracja publikuje zdarzenia na magistrali `hass.bus`:
 
 - `polish_shipment_tracking_new_shipment` - nowa przesyłka
 - `polish_shipment_tracking_shipment_status_changed` - przesyłka zmieniła stan
+- `polish_shipment_tracking_shipment_removed` - śledzona przesyłka zniknęła z
+  listy kuriera albo została zarchiwizowana bez znanego statusu końcowego
 
 Przykładowy payload:
 
@@ -116,6 +152,14 @@ Dla `polish_shipment_tracking_shipment_status_changed` dodatkowo występują pol
 - `old_status_key`
 - `new_status_raw`
 - `new_status_key`
+
+Zmiany na status końcowy (`delivered`, `returned`, `cancelled`) są zgłaszane
+przed usunięciem czujnika przesyłki. Jeśli kurier całkowicie pomija przesyłkę,
+integracja czeka na dwa kolejne udane odpytywania przed emisją zdarzenia
+`polish_shipment_tracking_shipment_removed`, zamiast wnioskować o stanie
+końcowym z jednej niepełnej odpowiedzi. Czujnik przesyłki pozostaje dostępny
+po pierwszym braku. Zdarzenie zawiera poprzedni status i pole `reason`
+o wartości `missing_from_feed` lub `archived` (dla znacznika archiwizacji Pocztex).
 
 ## Statusy (normalizacja)
 
