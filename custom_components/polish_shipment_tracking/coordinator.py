@@ -54,6 +54,10 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         self.courier = entry.data[CONF_COURIER]
         self.known_parcels = set()
         self.add_entities_callback = None
+        # Per-account session owned by this coordinator (DHL/GLS). Their auth is
+        # cookie-based, so accounts must NOT share HA's global cookie jar or one
+        # account's access-token cookie bleeds into the other's requests.
+        self._owned_session: aiohttp.ClientSession | None = None
         self._include_recipients = parse_recipient_patterns(
             entry.options.get(CONF_INCLUDE_RECIPIENTS)
         )
@@ -63,14 +67,14 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         # Allegro only: every order from the last fetch, including the ones
         # hidden because a carrier account already tracks the same parcel.
         self.allegro_orders: list[dict] = []
-        
+
         super().__init__(
             hass,
             _LOGGER,
             name=f"Shipment Tracking {self.courier}",
             update_interval=timedelta(minutes=15),
         )
-        
+
         self.session = async_get_clientsession(hass)
         self.api = self._get_api_instance()
 
@@ -155,9 +159,16 @@ class ShipmentCoordinator(DataUpdateCoordinator):
             
         elif self.courier == "dhl":
             from .api_dhl import DhlApi
-            api = DhlApi(self.session, device_id=device_uid)
+            # Isolated session with a dummy cookie jar so this account's DHL
+            # cookies never leak into (or get overwritten by) another account
+            # sharing HA's global session. Cookies are carried explicitly by
+            # DhlApi via the Cookie header / self._cookies instead.
+            self._owned_session = async_create_clientsession(
+                self.hass, cookie_jar=aiohttp.DummyCookieJar()
+            )
+            api = DhlApi(self._owned_session, device_id=device_uid)
             api._token = token
-            
+
             cookies_json = data.get("cookies")
             if cookies_json:
                 try:
@@ -181,10 +192,10 @@ class ShipmentCoordinator(DataUpdateCoordinator):
             # GlsApi manages cookies manually; a shared session's cookie jar
             # accumulates Azure B2C cookies that eventually poison token
             # requests, so give it a cookieless session (same as config flow).
-            gls_session = async_create_clientsession(
+            self._owned_session = async_create_clientsession(
                 self.hass, cookie_jar=aiohttp.DummyCookieJar()
             )
-            api = GlsApi(gls_session, session_id=data.get(CONF_SESSION_ID))
+            api = GlsApi(self._owned_session, session_id=data.get(CONF_SESSION_ID))
             api._token = token
             api._refresh_token = refresh_token
             api._id_token = data.get(CONF_ID_TOKEN)
@@ -433,6 +444,12 @@ class ShipmentCoordinator(DataUpdateCoordinator):
             else:
                 enriched.append(result)
         return enriched
+
+    async def async_close(self) -> None:
+        """Close any session owned by this coordinator (DHL/GLS isolated session)."""
+        if self._owned_session is not None:
+            await self._owned_session.close()
+            self._owned_session = None
 
     def _get_gls_tracking_uid(self, shipment_no: str) -> str | None:
         """Return the trackingUid for a GLS shipment identified by shipmentNo."""
