@@ -29,6 +29,7 @@ Integracja dla Home Assistant do śledzenia przesyłek u popularnych przewoźnik
 - DPD
 - Pocztex
 - GLS
+- Allegro (zamówienia, eksperymentalne)
 
 > [!WARNING]
 > Integracja korzysta z nieoficjalnych API aplikacji/serwisów przewoźników. Te API mogą ulec zmianie bez uprzedzenia.
@@ -67,6 +68,39 @@ Integracja dla Home Assistant do śledzenia przesyłek u popularnych przewoźnik
 4. Zapisz
 
 Po pierwszym odświeżeniu powinny pojawić się encje `sensor` dla przesyłek.
+
+### Allegro (eksperymentalne)
+
+Allegro nie ma publicznego API dla kupujących, więc integracja korzysta z sesji
+z przeglądarki (ciasteczko `QXLSESSID`):
+
+1. Zaloguj się na [allegro.pl](https://allegro.pl) w przeglądarce na komputerze.
+2. Naciśnij F12. Firefox: zakładka Storage -> Cookies -> `https://allegro.pl`.
+   Chrome / Edge: zakładka Application -> Cookies -> `https://allegro.pl`.
+3. Skopiuj wartość ciasteczka `QXLSESSID` i wklej ją przy dodawaniu konta Allegro.
+
+Gdy sesja wygaśnie, Home Assistant pokaże powiadomienie o ponownym
+uwierzytelnieniu. Wystarczy wtedy wkleić nowe ciasteczko.
+
+Każde zamówienie Allegro jest osobnym sensorem z produktami, sprzedawcą, osią
+czasu i punktem odbioru. Jeśli paczkę z zamówienia śledzi już konto kuriera
+(np. InPost), sensor Allegro nie powstaje. Zamiast tego paczka kuriera dostaje
+atrybuty `allegro_items`, `allegro_seller`, `allegro_order_id` i inne, a karta
+pokazuje zamówione produkty.
+
+### Filtry odbiorcy
+
+W opcjach każdego konta (Konfiguruj) można ustawić:
+
+- Pokazuj tylko paczki dla: widoczne są tylko paczki pasujące do któregoś wzorca,
+- Ukryj paczki dla: paczki pasujące do któregoś wzorca są ukrywane.
+
+Jeden wzorzec w linii (lub po przecinku). Wzorzec pasuje do numeru telefonu
+odbiorcy (porównywane jest ostatnie 9 cyfr, więc format nie ma znaczenia),
+imienia i nazwiska albo adresu, także adresu punktu odbioru. Wielkość liter i
+polskie znaki nie mają znaczenia. Paczka jest ukrywana tylko wtedy, gdy
+przewoźnik podaje dane, które pozwalają to rozstrzygnąć. Na przykład wzorzec
+telefonu nie ukryje paczki, dla której przewoźnik nie podaje numeru odbiorcy.
 
 ## Encje
 
