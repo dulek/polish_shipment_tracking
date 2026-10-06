@@ -34,6 +34,9 @@ _LOGGER = logging.getLogger(__name__)
 
 COURIERS = ["inpost", "dpd", "dhl", "pocztex", "gls", "allegro"]
 
+# hassfest rejects URLs inside translation strings.
+ALLEGRO_PLACEHOLDERS = {"allegro_url": "https://allegro.pl"}
+
 
 async def _async_validate_allegro_cookie(hass, cookie: str) -> str:
     """Return the Allegro login for a QXLSESSID cookie, raising when invalid."""
@@ -223,6 +226,7 @@ class ShipmentTrackingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_COOKIE): str,
             }),
             errors=errors,
+            description_placeholders=ALLEGRO_PLACEHOLDERS,
         )
 
     async def async_step_allegro_cookie(self, user_input=None):
@@ -252,6 +256,7 @@ class ShipmentTrackingConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_COOKIE): str,
             }),
             errors=errors,
+            description_placeholders=ALLEGRO_PLACEHOLDERS,
         )
 
     @staticmethod
