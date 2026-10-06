@@ -17,6 +17,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN, INTEGRATION_VERSION, CONF_EMAIL, SIGNAL_ALLEGRO_ORDERS_UPDATED
 from .coordinator import ShipmentCoordinator
 from .helpers import (
+    get_shipment_entity_id,
     get_account_label,
     get_parcel_id,
     get_parcel_tracking_numbers,
@@ -100,6 +101,21 @@ async def async_setup_entry(
         )
         new_entities = []
         registry = async_get_entity_registry(hass)
+
+        # Terminal parcels have already been filtered out of coordinator.data.
+        # Publish their transitions while the old entity ID still exists.
+        pending_events = coordinator.pending_lifecycle_events
+        coordinator.pending_lifecycle_events = []
+        for event_name, event_data in pending_events:
+            parcel_id = event_data["shipment_id"]
+            entity_id = get_shipment_entity_id(
+                registry, DOMAIN, coordinator.courier, entry.entry_id, parcel_id
+            )
+            _queue_or_fire_event(
+                hass,
+                f"{DOMAIN}_{event_name}",
+                {**event_data, "entity_id": entity_id},
+            )
         
         current_ids = set()
         for parcel in current_data:

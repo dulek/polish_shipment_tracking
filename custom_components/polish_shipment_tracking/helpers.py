@@ -1,5 +1,5 @@
 """Helper functions for Polish Shipment Tracking."""
-from .const import DOMAIN
+
 
 def get_parcel_id(data: dict, courier: str) -> str | None:
     """Extract parcel ID from data based on courier."""
@@ -441,6 +441,99 @@ def is_delivered(data: dict, courier: str) -> bool:
         return True
     status_key = normalize_status(get_raw_status(data, courier), courier)
     return status_key in {"delivered", "returned", "cancelled"}
+
+
+def reconcile_departed_parcels(
+    previous: list[dict] | None,
+    current: list[dict],
+    courier: str,
+    missing_counts: dict[str, int],
+) -> tuple[list[tuple[str, dict]], list[dict], dict[str, int]]:
+    """Describe terminal parcels and confirm missing parcels on a second poll.
+
+    The coordinator exposes only active parcels, so this comparison must happen
+    against the fresh, unfiltered response before terminal parcels are dropped.
+    Keep a parcel active through its first missing response so a transiently
+    incomplete feed cannot remove its entity or fire a false removal event.
+    """
+    if previous is None or not isinstance(current, list):
+        return [], [], {}
+
+    current_by_id = {}
+    for parcel in current:
+        if isinstance(parcel, dict):
+            parcel_id = get_parcel_id(parcel, courier)
+            if parcel_id is not None:
+                current_by_id[str(parcel_id)] = parcel
+
+    events = []
+    retained = []
+    next_missing_counts = {}
+    for old_parcel in previous:
+        if not isinstance(old_parcel, dict):
+            continue
+        parcel_id = get_parcel_id(old_parcel, courier)
+        if parcel_id is None:
+            continue
+
+        parcel_id = str(parcel_id)
+        new_parcel = current_by_id.get(parcel_id)
+        if new_parcel is not None and not is_delivered(new_parcel, courier):
+            continue
+
+        if new_parcel is None:
+            missed = missing_counts.get(parcel_id, 0) + 1
+            if missed < 2:
+                retained.append(old_parcel)
+                next_missing_counts[parcel_id] = missed
+                continue
+
+        old_raw_status = get_raw_status(old_parcel, courier)
+        event_data = {
+            "courier": courier,
+            "shipment_id": parcel_id,
+            "old_status_raw": old_raw_status,
+            "old_status_key": normalize_status(old_raw_status, courier),
+        }
+        if new_parcel is not None:
+            new_raw_status = get_raw_status(new_parcel, courier)
+            new_status_key = normalize_status(new_raw_status, courier)
+            if new_status_key in {"delivered", "returned", "cancelled"}:
+                events.append(
+                    (
+                        "shipment_status_changed",
+                        {
+                            **event_data,
+                            "new_status_raw": new_raw_status,
+                            "new_status_key": new_status_key,
+                        },
+                    )
+                )
+                continue
+            reason = "archived"
+        else:
+            reason = "missing_from_feed"
+
+        events.append(("shipment_removed", {**event_data, "reason": reason}))
+
+    return events, retained, next_missing_counts
+
+
+def get_shipment_entity_id(
+    registry, domain: str, courier: str, entry_id: str, parcel_id: str
+) -> str | None:
+    """Find this account's parcel entity across old and account-scoped IDs."""
+    for unique_id in (
+        f"{courier}_{entry_id}_{parcel_id}",
+        f"{courier}_{parcel_id}",
+    ):
+        entity_id = registry.async_get_entity_id("sensor", domain, unique_id)
+        if entity_id is None:
+            continue
+        entity = registry.async_get(entity_id)
+        if entity is not None and entity.config_entry_id == entry_id:
+            return entity_id
+    return None
 
 
 def normalize_allegro_orders(payload) -> list[dict]:

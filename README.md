@@ -124,6 +124,8 @@ Integracja publikuje zdarzenia na magistrali `hass.bus`:
 
 - `polish_shipment_tracking_new_shipment` - nowa przesyłka
 - `polish_shipment_tracking_shipment_status_changed` - przesyłka zmieniła stan
+- `polish_shipment_tracking_shipment_removed` - śledzona przesyłka zniknęła z
+  listy kuriera albo została zarchiwizowana bez znanego statusu końcowego
 
 Przykładowy payload:
 
@@ -143,6 +145,14 @@ Dla `polish_shipment_tracking_shipment_status_changed` dodatkowo występują pol
 - `old_status_key`
 - `new_status_raw`
 - `new_status_key`
+
+Zmiany na status końcowy (`delivered`, `returned`, `cancelled`) są zgłaszane
+przed usunięciem czujnika przesyłki. Jeśli kurier całkowicie pomija przesyłkę,
+integracja czeka na dwa kolejne udane odpytywania przed emisją zdarzenia
+`polish_shipment_tracking_shipment_removed`, zamiast wnioskować o stanie
+końcowym z jednej niepełnej odpowiedzi. Czujnik przesyłki pozostaje dostępny
+po pierwszym braku. Zdarzenie zawiera poprzedni status i pole `reason`
+o wartości `missing_from_feed` lub `archived` (dla znacznika archiwizacji Pocztex).
 
 ## Statusy (normalizacja)
 

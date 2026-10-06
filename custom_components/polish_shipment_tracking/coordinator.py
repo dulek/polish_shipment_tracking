@@ -41,6 +41,7 @@ from .helpers import (
     merge_allegro_details,
     normalize_allegro_orders,
     parse_recipient_patterns,
+    reconcile_departed_parcels,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,6 +54,8 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         self.entry = entry
         self.courier = entry.data[CONF_COURIER]
         self.known_parcels = set()
+        self.pending_lifecycle_events: list[tuple[str, dict]] = []
+        self._missing_parcel_counts: dict[str, int] = {}
         self.add_entities_callback = None
         # Per-account session owned by this coordinator (DHL/GLS). Their auth is
         # cookie-based, so accounts must NOT share HA's global cookie jar or one
@@ -213,8 +216,12 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         try:
             parcels = await self._fetch_parcels_with_retry()
             self._persist_auth_if_changed()
-            filtered = self._filter_active_parcels(parcels)
-            return filtered
+            events, retained, missing_counts = reconcile_departed_parcels(
+                self.data, parcels, self.courier, self._missing_parcel_counts
+            )
+            self.pending_lifecycle_events = events
+            self._missing_parcel_counts = missing_counts
+            return self._filter_active_parcels(parcels) + retained
         except Exception as err:
             if self.courier == "allegro" and any(code in str(err) for code in ("401", "403")):
                 # The pasted session cookie expired: let HA ask for a new one
@@ -288,13 +295,8 @@ class ShipmentCoordinator(DataUpdateCoordinator):
                     if key in data and isinstance(data[key], list):
                         parcels = data[key]
                         break
-            # Archived parcels come back with state nulled out; drop them
-            # before spending detail requests on them.
-            parcels = [
-                p
-                for p in parcels
-                if not (isinstance(p, dict) and p.get("archived") is True)
-            ]
+            # Keep archive markers for lifecycle classification, but do not
+            # request details for parcels that are already archived.
             if not parcels:
                 return []
 
@@ -302,7 +304,7 @@ class ShipmentCoordinator(DataUpdateCoordinator):
             detail_tasks = []
             for parcel in parcels:
                 detail_id = None
-                if isinstance(parcel, dict):
+                if isinstance(parcel, dict) and parcel.get("archived") is not True:
                     detail_id = get_parcel_detail_id(parcel, self.courier)
                 if detail_id is None:
                     detail_tasks.append(asyncio.sleep(0, result=None))
@@ -587,7 +589,13 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         if not replaced:
             current_data.append(parcel)
 
-        self.async_set_updated_data(self._filter_active_parcels(current_data))
+        events, _, _ = reconcile_departed_parcels(
+            self.data, current_data, self.courier, self._missing_parcel_counts
+        )
+        self.pending_lifecycle_events = events
+        self._missing_parcel_counts.pop(str(tracking_number), None)
+        filtered = self._filter_active_parcels(current_data)
+        self.async_set_updated_data(filtered)
 
     async def _refresh_token(self):
         """Refresh API token and update config entry."""
