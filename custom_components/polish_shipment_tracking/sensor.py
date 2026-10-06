@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
@@ -730,6 +730,7 @@ class ActiveShipmentsSensor(SensorEntity):
     _attr_should_poll = False
     _attr_has_entity_name = True
     _attr_icon = "mdi:package-variant"
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_translation_key = "active_shipments"
     _attr_unique_id = ACTIVE_SHIPMENTS_UNIQUE_ID
     _attr_suggested_object_id = f"{DOMAIN}_active_shipments"
@@ -793,6 +794,7 @@ class ReadyForPickupAccountSensor(CoordinatorEntity[ShipmentCoordinator], Sensor
 
     _attr_has_entity_name = True
     _attr_icon = "mdi:package-variant"
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_translation_key = "ready_for_pickup_account"
 
     def __init__(self, coordinator: ShipmentCoordinator) -> None:
