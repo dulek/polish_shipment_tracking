@@ -5,9 +5,11 @@ import json
 import time
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
 import aiohttp
 
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.aiohttp_client import (
     async_create_clientsession,
@@ -25,9 +27,21 @@ from .const import (
     CONF_ID_TOKEN,
     CONF_SESSION_ID,
     CONF_SESSION_REGISTERED,
+    CONF_COOKIE,
+    CONF_INCLUDE_RECIPIENTS,
+    CONF_EXCLUDE_RECIPIENTS,
+    SIGNAL_PARCELS_UPDATED,
+    SIGNAL_ALLEGRO_ORDERS_UPDATED,
 )
 from .helpers import get_parcel_detail_id, get_parcel_id
-from .helpers import is_delivered
+from .helpers import (
+    get_parcel_tracking_numbers,
+    is_delivered,
+    matches_recipient_filters,
+    merge_allegro_details,
+    normalize_allegro_orders,
+    parse_recipient_patterns,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +58,15 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         # cookie-based, so accounts must NOT share HA's global cookie jar or one
         # account's access-token cookie bleeds into the other's requests.
         self._owned_session: aiohttp.ClientSession | None = None
+        self._include_recipients = parse_recipient_patterns(
+            entry.options.get(CONF_INCLUDE_RECIPIENTS)
+        )
+        self._exclude_recipients = parse_recipient_patterns(
+            entry.options.get(CONF_EXCLUDE_RECIPIENTS)
+        )
+        # Allegro only: every order from the last fetch, including the ones
+        # hidden because a carrier account already tracks the same parcel.
+        self.allegro_orders: list[dict] = []
 
         super().__init__(
             hass,
@@ -54,6 +77,63 @@ class ShipmentCoordinator(DataUpdateCoordinator):
 
         self.session = async_get_clientsession(hass)
         self.api = self._get_api_instance()
+
+    @callback
+    def async_start_linking(self):
+        """Wire the cross-account parcel matching; returns the unsubscribe callback."""
+        if self.courier == "allegro":
+            remove_signal = async_dispatcher_connect(
+                self.hass, SIGNAL_PARCELS_UPDATED, self._async_carrier_parcels_updated
+            )
+            remove_listener = self.async_add_listener(self._async_announce_orders)
+
+            @callback
+            def _remove():
+                remove_signal()
+                remove_listener()
+
+            return _remove
+        remove_listener = self.async_add_listener(self._async_announce_parcels)
+        # The first refresh ran before this listener existed; announce it so an
+        # Allegro account that started earlier can hide its duplicates now.
+        self._async_announce_parcels()
+        return remove_listener
+
+    @callback
+    def _async_announce_orders(self) -> None:
+        async_dispatcher_send(self.hass, SIGNAL_ALLEGRO_ORDERS_UPDATED)
+
+    @callback
+    def _async_announce_parcels(self) -> None:
+        async_dispatcher_send(self.hass, SIGNAL_PARCELS_UPDATED)
+
+    @callback
+    def _async_carrier_parcels_updated(self) -> None:
+        """Re-hide Allegro orders once a carrier account picks the parcel up."""
+        if self.data is None:
+            return
+        visible = self._filter_active_parcels(self.allegro_orders)
+        if visible != self.data:
+            # Set data directly: async_set_updated_data would reschedule the
+            # poll, and frequent carrier updates could then starve it.
+            self.data = visible
+            self.async_update_listeners()
+
+    def _carrier_tracking_numbers(self) -> set[str]:
+        """Tracking numbers held by the carrier accounts since startup.
+
+        Remembered after the carrier drops a parcel too: carriers usually
+        report the pickup before Allegro does, and the order must not pop
+        back up as a new Allegro shipment in between.
+        """
+        domain_data = self.hass.data.setdefault(DOMAIN, {})
+        numbers: set[str] = domain_data.setdefault("_carrier_tracking_numbers", set())
+        for coordinator in domain_data.values():
+            if not isinstance(coordinator, ShipmentCoordinator) or coordinator.courier == "allegro":
+                continue
+            for parcel in coordinator.data or []:
+                numbers |= get_parcel_tracking_numbers(parcel, coordinator.courier)
+        return numbers
 
     def _get_api_instance(self):
         """Get API instance based on courier."""
@@ -122,6 +202,10 @@ class ShipmentCoordinator(DataUpdateCoordinator):
             api._expires_at = data.get(CONF_TOKEN_EXPIRES_AT, 0) or 0
             api._session_registered = data.get(CONF_SESSION_REGISTERED)
             return api
+
+        elif self.courier == "allegro":
+            from .api_allegro import AllegroApi
+            return AllegroApi(self.session, data.get(CONF_COOKIE))
         return None
 
     async def _async_update_data(self):
@@ -132,6 +216,12 @@ class ShipmentCoordinator(DataUpdateCoordinator):
             filtered = self._filter_active_parcels(parcels)
             return filtered
         except Exception as err:
+            if self.courier == "allegro" and any(code in str(err) for code in ("401", "403")):
+                # The pasted session cookie expired: let HA ask for a new one
+                # (repair notification + reauth flow) instead of failing silently.
+                raise ConfigEntryAuthFailed(
+                    "Allegro session expired, paste a new QXLSESSID cookie"
+                ) from err
             _LOGGER.error("Error fetching data for %s: %s", self.courier, err)
             raise UpdateFailed(f"Error communicating with API: {err}")
 
@@ -282,6 +372,31 @@ class ShipmentCoordinator(DataUpdateCoordinator):
                 enriched.append(merged)
             return enriched
 
+        elif self.courier == "allegro":
+            data = await self.api.get_orders()
+            if not isinstance(data, dict):
+                raise Exception(f"Allegro API Error: unexpected orders response: {str(data)[:200]}")
+            orders = normalize_allegro_orders(data)
+            # Recipient data (for the filters) and the timeline only come with
+            # the per-order details, so fetch them for orders still under way.
+            semaphore = asyncio.Semaphore(5)
+
+            async def _with_details(order):
+                if is_delivered(order, self.courier):
+                    return order
+                try:
+                    async with semaphore:
+                        details = await self.api.get_order(order["orderId"])
+                except Exception as err:
+                    # Without details the recipient filters cannot see who the
+                    # parcel is for, so this is worth surfacing.
+                    _LOGGER.warning("Allegro order details failed for %s: %s", order["orderId"], err)
+                    return order
+                return merge_allegro_details(order, details)
+
+            self.allegro_orders = list(await asyncio.gather(*(_with_details(order) for order in orders)))
+            return self.allegro_orders
+
         return []
 
     async def _enrich_parcels_with_details(self, parcels):
@@ -416,14 +531,28 @@ class ShipmentCoordinator(DataUpdateCoordinator):
         return None
 
     def _filter_active_parcels(self, parcels):
-        """Keep only active parcels in coordinator data."""
+        """Keep only active parcels this account should show."""
         if not isinstance(parcels, list):
             return []
-        return [
+        active = [
             parcel
             for parcel in parcels
-            if isinstance(parcel, dict) and not is_delivered(parcel, self.courier)
+            if isinstance(parcel, dict)
+            and not is_delivered(parcel, self.courier)
+            and matches_recipient_filters(
+                parcel, self._include_recipients, self._exclude_recipients
+            )
         ]
+        if self.courier == "allegro":
+            # An order shipped with a carrier the user also has an account
+            # for is shown by that account; Allegro only adds order details.
+            tracked = self._carrier_tracking_numbers()
+            active = [
+                parcel
+                for parcel in active
+                if not (get_parcel_tracking_numbers(parcel, self.courier) & tracked)
+            ]
+        return active
 
     async def async_refresh_parcel(self, tracking_number: str) -> None:
         """Refresh a single parcel when courier API supports it.

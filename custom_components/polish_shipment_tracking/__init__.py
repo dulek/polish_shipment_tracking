@@ -3,42 +3,16 @@ from __future__ import annotations
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, CoreState, EVENT_HOMEASSISTANT_STARTED, callback
+from homeassistant.core import HomeAssistant, CoreState, EVENT_HOMEASSISTANT_STARTED
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers import entity_registry as er
 from homeassistant.components import websocket_api
 import voluptuous as vol
 
-from .const import DOMAIN, PLATFORMS, INTEGRATION_VERSION, CONF_COURIER
+from .const import DOMAIN, PLATFORMS, INTEGRATION_VERSION
 from .frontend import JSModuleRegistration
 from .coordinator import ShipmentCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-
-async def _async_migrate_unique_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Account-scope per-parcel entity unique_ids.
-
-    Old scheme `{courier}_{number}` (and `_refresh`/`_manage` variants) was not
-    scoped per account, so two accounts of the same courier collided. Rewrite to
-    `{courier}_{entry_id}_{number}`. Idempotent and per-entry; the refresh-all
-    button already carries the entry_id so it is left untouched.
-    """
-    courier = entry.data.get(CONF_COURIER)
-    if not courier:
-        return
-    prefix = f"{courier}_"
-    scoped_prefix = f"{courier}_{entry.entry_id}"
-
-    @callback
-    def _migrator(entity_entry: er.RegistryEntry) -> dict | None:
-        uid = entity_entry.unique_id or ""
-        if not uid.startswith(prefix) or uid.startswith(scoped_prefix):
-            return None
-        rest = uid[len(prefix):]
-        return {"new_unique_id": f"{courier}_{entry.entry_id}_{rest}"}
-
-    await er.async_migrate_entries(hass, entry.entry_id, _migrator)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -74,8 +48,6 @@ async def async_setup(hass: HomeAssistant, config: dict):
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Set up from a config entry."""
-    await _async_migrate_unique_ids(hass, entry)
-
     coordinator = ShipmentCoordinator(hass, entry)
     try:
         await coordinator.async_config_entry_first_refresh()
@@ -87,8 +59,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-    
+    entry.async_on_unload(coordinator.async_start_linking())
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload so new recipient filters (or a new Allegro cookie) apply."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry):
     """Unload a config entry."""

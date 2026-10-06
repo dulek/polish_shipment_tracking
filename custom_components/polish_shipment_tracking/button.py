@@ -10,9 +10,9 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_EMAIL, CONF_PHONE, DOMAIN, INTEGRATION_VERSION
+from .const import DOMAIN, INTEGRATION_VERSION
 from .coordinator import ShipmentCoordinator
-from .helpers import get_parcel_id, is_delivered
+from .helpers import get_account_label, get_parcel_id, is_delivered
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ async def async_setup_entry(
                 continue
 
             current_ids.add(pid)
-            unique_id = _get_refresh_unique_id(coordinator.courier, entry.entry_id, pid)
+            unique_id = _get_refresh_unique_id(coordinator.courier, pid)
             existing_entity_id = registry.async_get_entity_id("button", DOMAIN, unique_id)
             if not _should_add_runtime_entity(hass, registry, entry, existing_entity_id):
                 continue
@@ -57,7 +57,7 @@ async def async_setup_entry(
         if coordinator.courier == "dpd":
             manage_buttons = []
             for pid in current_ids:
-                unique_id = _get_manage_unique_id(coordinator.courier, entry.entry_id, pid)
+                unique_id = _get_manage_unique_id(coordinator.courier, pid)
                 existing_entity_id = registry.async_get_entity_id("button", DOMAIN, unique_id)
                 if not _should_add_runtime_entity(hass, registry, entry, existing_entity_id):
                     continue
@@ -85,13 +85,9 @@ def _async_remove_old_parcel_buttons(
 ) -> None:
     """Remove per-parcel buttons that no longer match active shipments."""
     registry = async_get_entity_registry(hass)
-    current_unique_ids = {
-        _get_refresh_unique_id(coordinator.courier, entry.entry_id, pid) for pid in current_ids
-    }
+    current_unique_ids = {_get_refresh_unique_id(coordinator.courier, pid) for pid in current_ids}
     if coordinator.courier == "dpd":
-        current_unique_ids |= {
-            _get_manage_unique_id(coordinator.courier, entry.entry_id, pid) for pid in current_ids
-        }
+        current_unique_ids |= {_get_manage_unique_id(coordinator.courier, pid) for pid in current_ids}
 
     entities_to_remove = []
     for entity_entry in registry.entities.values():
@@ -133,19 +129,19 @@ def _get_refresh_all_unique_id(coordinator: ShipmentCoordinator) -> str:
     return f"{coordinator.courier}_{coordinator.entry.entry_id}_refresh_all"
 
 
-def _get_refresh_unique_id(courier: str, entry_id: str, tracking_number: str) -> str:
-    return f"{courier}_{entry_id}_{tracking_number}_refresh"
+def _get_refresh_unique_id(courier: str, tracking_number: str) -> str:
+    return f"{courier}_{tracking_number}_refresh"
 
 
-def _get_manage_unique_id(courier: str, entry_id: str, tracking_number: str) -> str:
-    return f"{courier}_{entry_id}_{tracking_number}_manage"
+def _get_manage_unique_id(courier: str, tracking_number: str) -> str:
+    return f"{courier}_{tracking_number}_manage"
 
 
 def _build_device_info(coordinator: ShipmentCoordinator) -> DeviceInfo:
-    account_id = coordinator.entry.data.get(CONF_PHONE) or coordinator.entry.data.get(CONF_EMAIL)
+    account_id = get_account_label(coordinator.entry.data)
     return DeviceInfo(
         identifiers={(DOMAIN, coordinator.entry.entry_id)},
-        name=f"{coordinator.courier.title()} ({account_id})",
+        name=f"{coordinator.courier.title()} ({account_id})" if account_id else coordinator.courier.title(),
         manufacturer="Polish Shipment Tracking",
         model=coordinator.courier.title(),
         sw_version=INTEGRATION_VERSION,
@@ -191,9 +187,7 @@ class RefreshShipmentButton(CoordinatorEntity[ShipmentCoordinator], ButtonEntity
         super().__init__(coordinator)
         self._tracking_number = tracking_number
         self._attr_name = f"Refresh shipment {tracking_number}"
-        self._attr_unique_id = _get_refresh_unique_id(
-            coordinator.courier, coordinator.entry.entry_id, tracking_number
-        )
+        self._attr_unique_id = _get_refresh_unique_id(coordinator.courier, tracking_number)
         self._attr_device_info = _build_device_info(coordinator)
 
     async def async_press(self) -> None:
@@ -227,9 +221,7 @@ class ManageShipmentButton(CoordinatorEntity[ShipmentCoordinator], ButtonEntity)
         super().__init__(coordinator)
         self._tracking_number = tracking_number
         self._attr_name = f"Manage shipment {tracking_number}"
-        self._attr_unique_id = _get_manage_unique_id(
-            coordinator.courier, coordinator.entry.entry_id, tracking_number
-        )
+        self._attr_unique_id = _get_manage_unique_id(coordinator.courier, tracking_number)
         self._attr_device_info = _build_device_info(coordinator)
 
     async def async_press(self) -> None:
